@@ -6,7 +6,7 @@ RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
-FROM nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+FROM nginx:stable-alpine@sha256:ec664813a30459a8e7176315268a623f6b31abc370eeac51c7de81cd4ec4d451
 
 # Only this variable is substituted in the nginx template. Leaving the rest of
 # nginx's $variables untouched is essential for request-time evaluation.
@@ -19,4 +19,9 @@ COPY nginx/security-headers.conf /etc/nginx/snippets/security-headers.conf
 COPY nginx/10-validate-trusted-proxy-cidr.sh /docker-entrypoint.d/10-validate-trusted-proxy-cidr.sh
 COPY --from=frontend-build /frontend/dist /usr/share/nginx/html
 
-RUN chmod 0555 /docker-entrypoint.d/10-validate-trusted-proxy-cidr.sh
+RUN chmod 0555 /docker-entrypoint.d/10-validate-trusted-proxy-cidr.sh \
+    && touch /var/run/nginx.pid \
+    && chown -R nginx:nginx /etc/nginx/conf.d /var/cache/nginx /var/log/nginx \
+    && chown nginx:nginx /var/run/nginx.pid
+
+USER nginx

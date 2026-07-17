@@ -9,6 +9,7 @@ MONITOR_DIR="${SECRETS_DIR}/monitor"
 WEB_DIR="${SECRETS_DIR}/web"
 KIBANA_IMAGE='docker.elastic.co/kibana/kibana:9.4.2@sha256:862c968ad7dc3d4e51af83fa30b25c0556b235f54f5a8917284eab7cf322381f'
 LOGSTASH_IMAGE='docker.elastic.co/logstash/logstash:9.4.2@sha256:a0664a36744b4767b8648d24d1fa676f92349f24b69302879fcd7da0798b42fd'
+FILEBEAT_IMAGE='docker.elastic.co/beats/filebeat:9.4.2@sha256:f2b3bb6a6a02ebfc5f2f91cf8d560522acc4965bdb941f3f1608964cb8544829'
 
 for binary in docker openssl; do
   command -v "$binary" >/dev/null 2>&1 || {
@@ -35,6 +36,17 @@ required_files=(
   "${WEB_DIR}/filebeat-web.key"
 )
 
+secure_filebeat_key() {
+  # Bind mounts preserve numeric ownership. GitHub-hosted runners are not UID
+  # 1000, while the unprivileged Filebeat container deliberately is. Apply the
+  # ownership inside a tightly constrained container so the key can stay 0600.
+  docker run --rm --network none --read-only --cap-drop ALL \
+    --cap-add CHOWN --cap-add FOWNER --user 0:0 \
+    -v "${WEB_DIR}/filebeat-web.key:/filebeat-web.key" \
+    --entrypoint sh "$FILEBEAT_IMAGE" \
+    -c 'chown 1000:1000 /filebeat-web.key && chmod 0600 /filebeat-web.key'
+}
+
 existing=0
 for path in "${required_files[@]}"; do
   [ ! -e "$path" ] || existing=$((existing + 1))
@@ -42,7 +54,8 @@ done
 if [ "$existing" -eq "${#required_files[@]}" ]; then
   chmod 0700 "$SECRETS_DIR" "$MONITOR_DIR" "$WEB_DIR"
   chmod 0600 "${MONITOR_DIR}"/*.password "${MONITOR_DIR}"/*.key \
-    "${MONITOR_DIR}"/*.keystore "${WEB_DIR}"/*.key
+    "${MONITOR_DIR}"/*.keystore
+  secure_filebeat_key
   printf 'Observability secrets already exist and were left unchanged in %s.\n' "$SECRETS_DIR"
   exit 0
 fi
@@ -120,6 +133,7 @@ cp "${MONITOR_DIR}/ca.crt" "${WEB_DIR}/ca.crt"
 rm -f "${WEB_DIR}/filebeat-web.csr" "${WEB_DIR}/filebeat-web.ext"
 chmod 0600 "${WEB_DIR}/filebeat-web.key"
 chmod 0644 "${WEB_DIR}/filebeat-web.crt" "${WEB_DIR}/ca.crt"
+secure_filebeat_key
 
 create_kibana_keystore() {
   local config_dir="${MONITOR_DIR}/.kibana-config"

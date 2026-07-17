@@ -89,14 +89,6 @@ resource "aws_security_group" "web" {
     cidr_blocks = var.admin_cidrs
   }
 
-  egress {
-    description = "Package, image and mTLS egress"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
   lifecycle { create_before_destroy = true }
   tags = { Name = "${var.project_name}-web-sg" }
 }
@@ -122,16 +114,107 @@ resource "aws_security_group" "monitor" {
     security_groups = [aws_security_group.web.id]
   }
 
-  egress {
-    description = "Package and image downloads"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
   lifecycle { create_before_destroy = true }
   tags = { Name = "${var.project_name}-monitor-sg" }
+}
+
+# Ubuntu repositories and container/service endpoints use public, changing
+# addresses. These reviewed exceptions retain destination reachability while
+# limiting each rule to one required TCP port. The dated suppressions ensure
+# the architecture is revisited instead of silently accepting permanent risk.
+#trivy:ignore:AVD-AWS-0104:exp:2027-07-17
+resource "aws_vpc_security_group_egress_rule" "web_http" {
+  security_group_id = aws_security_group.web.id
+  description       = "HTTP package downloads"
+  cidr_ipv4         = "0.0.0.0/0"
+  from_port         = 80
+  to_port           = 80
+  ip_protocol       = "tcp"
+}
+
+#trivy:ignore:AVD-AWS-0104:exp:2027-07-17
+resource "aws_vpc_security_group_egress_rule" "web_https" {
+  security_group_id = aws_security_group.web.id
+  description       = "HTTPS APIs, packages, images and SSM"
+  cidr_ipv4         = "0.0.0.0/0"
+  from_port         = 443
+  to_port           = 443
+  ip_protocol       = "tcp"
+}
+
+#trivy:ignore:AVD-AWS-0104:exp:2027-07-17
+resource "aws_vpc_security_group_egress_rule" "web_submission_smtp" {
+  security_group_id = aws_security_group.web.id
+  description       = "Submission SMTP"
+  cidr_ipv4         = "0.0.0.0/0"
+  from_port         = 587
+  to_port           = 587
+  ip_protocol       = "tcp"
+}
+
+#trivy:ignore:AVD-AWS-0104:exp:2027-07-17
+resource "aws_vpc_security_group_egress_rule" "monitor_http" {
+  security_group_id = aws_security_group.monitor.id
+  description       = "HTTP package downloads"
+  cidr_ipv4         = "0.0.0.0/0"
+  from_port         = 80
+  to_port           = 80
+  ip_protocol       = "tcp"
+}
+
+#trivy:ignore:AVD-AWS-0104:exp:2027-07-17
+resource "aws_vpc_security_group_egress_rule" "monitor_https" {
+  security_group_id = aws_security_group.monitor.id
+  description       = "HTTPS APIs, packages, images and SSM"
+  cidr_ipv4         = "0.0.0.0/0"
+  from_port         = 443
+  to_port           = 443
+  ip_protocol       = "tcp"
+}
+
+resource "aws_vpc_security_group_egress_rule" "web_filebeat" {
+  security_group_id = aws_security_group.web.id
+  description       = "Mutual-TLS Filebeat to Monitor"
+  cidr_ipv4         = "${local.monitor_private_ip}/32"
+  from_port         = 5044
+  to_port           = 5044
+  ip_protocol       = "tcp"
+}
+
+resource "aws_vpc_security_group_egress_rule" "web_dns_udp" {
+  security_group_id = aws_security_group.web.id
+  description       = "DNS to the VPC resolver"
+  cidr_ipv4         = "${cidrhost(local.vpc_cidr, 2)}/32"
+  from_port         = 53
+  to_port           = 53
+  ip_protocol       = "udp"
+}
+
+resource "aws_vpc_security_group_egress_rule" "web_dns_tcp" {
+  security_group_id = aws_security_group.web.id
+  description       = "DNS fallback to the VPC resolver"
+  cidr_ipv4         = "${cidrhost(local.vpc_cidr, 2)}/32"
+  from_port         = 53
+  to_port           = 53
+  ip_protocol       = "tcp"
+}
+
+resource "aws_vpc_security_group_egress_rule" "monitor_dns_udp" {
+  security_group_id = aws_security_group.monitor.id
+  description       = "DNS to the VPC resolver"
+  cidr_ipv4         = "${cidrhost(local.vpc_cidr, 2)}/32"
+  from_port         = 53
+  to_port           = 53
+  ip_protocol       = "udp"
+}
+
+resource "aws_vpc_security_group_egress_rule" "monitor_dns_tcp" {
+  security_group_id = aws_security_group.monitor.id
+  description       = "DNS fallback to the VPC resolver"
+  cidr_ipv4         = "${cidrhost(local.vpc_cidr, 2)}/32"
+  from_port         = 53
+  to_port           = 53
+  ip_protocol       = "tcp"
 }
 
 resource "aws_iam_role" "ec2" {
