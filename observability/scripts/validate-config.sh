@@ -65,6 +65,7 @@ sed '/^path.queue:/d' observability/logstash/config/logstash.yml >"${validation_
 install -m 0600 .secrets/observability/monitor/logstash.keystore \
   "${validation_settings}/logstash.keystore"
 docker compose "${compose_args[@]}" run --rm --no-deps \
+  --user "$(id -u):$(id -g)" \
   -v "${validation_settings}:/tmp/flare-logstash-settings:ro" logstash \
   logstash -t --path.settings /tmp/flare-logstash-settings \
   --path.data /tmp/flare-logstash-data -f /usr/share/logstash/pipeline
