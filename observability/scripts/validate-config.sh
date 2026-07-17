@@ -62,10 +62,15 @@ trap 'rm -rf "$validation_settings"' EXIT
 # The live service owns the persistent-queue lock. Validate against an
 # ephemeral data path while retaining the same settings and secure keystore.
 sed '/^path.queue:/d' observability/logstash/config/logstash.yml >"${validation_settings}/logstash.yml"
+chmod 0711 "$validation_settings"
+chmod 0644 "${validation_settings}/logstash.yml"
 install -m 0600 .secrets/observability/monitor/logstash.keystore \
   "${validation_settings}/logstash.keystore"
+logstash_image=$(printf '%s' "$rendered" | jq -r '.services.logstash.image')
+docker run --rm --network none --read-only --cap-drop ALL --cap-add CHOWN \
+  --user 0:0 -v "${validation_settings}/logstash.keystore:/logstash.keystore" \
+  --entrypoint chown "$logstash_image" 1000:1000 /logstash.keystore
 docker compose "${compose_args[@]}" run --rm --no-deps \
-  --user "$(id -u):$(id -g)" \
   -v "${validation_settings}:/tmp/flare-logstash-settings:ro" logstash \
   logstash -t --path.settings /tmp/flare-logstash-settings \
   --path.data /tmp/flare-logstash-data -f /usr/share/logstash/pipeline
