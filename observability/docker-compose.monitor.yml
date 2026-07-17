@@ -1,0 +1,94 @@
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.4.2@sha256:857f6e8e25cdabf6e8225eaaf67fd8e0729bbd214731e4e117503f7f4b11636c
+    environment:
+      - node.name=flare-monitor-es01
+      - cluster.name=flare-aws-elk-lab
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - xpack.license.self_generated.type=basic
+      - xpack.security.enabled=true
+      - xpack.security.http.ssl.enabled=true
+      - xpack.security.http.ssl.key=/usr/share/elasticsearch/config/certs/elasticsearch.key
+      - xpack.security.http.ssl.certificate=/usr/share/elasticsearch/config/certs/elasticsearch.crt
+      - xpack.security.http.ssl.certificate_authorities=/usr/share/elasticsearch/config/certs/ca.crt
+      - xpack.security.transport.ssl.enabled=true
+      - xpack.security.transport.ssl.verification_mode=certificate
+      - xpack.security.transport.ssl.key=/usr/share/elasticsearch/config/certs/elasticsearch.key
+      - xpack.security.transport.ssl.certificate=/usr/share/elasticsearch/config/certs/elasticsearch.crt
+      - xpack.security.transport.ssl.certificate_authorities=/usr/share/elasticsearch/config/certs/ca.crt
+      - ELASTIC_PASSWORD_FILE=/run/flare-secrets/elasticsearch.password
+      - ES_JAVA_OPTS=-Xms3g -Xmx3g
+    volumes:
+      - /srv/elastic/elasticsearch:/usr/share/elasticsearch/data
+      - ${OBSERVABILITY_ROOT_DIR:-..}/.secrets/observability/monitor/ca.crt:/usr/share/elasticsearch/config/certs/ca.crt:ro
+      - ${OBSERVABILITY_ROOT_DIR:-..}/.secrets/observability/monitor/elasticsearch.crt:/usr/share/elasticsearch/config/certs/elasticsearch.crt:ro
+      - ${OBSERVABILITY_ROOT_DIR:-..}/.secrets/observability/monitor/elasticsearch.key:/usr/share/elasticsearch/config/certs/elasticsearch.key:ro
+      - ${OBSERVABILITY_ROOT_DIR:-..}/.secrets/observability/monitor/elasticsearch.password:/run/flare-secrets/elasticsearch.password:ro
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    mem_limit: 4g
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent --cacert /usr/share/elasticsearch/config/certs/ca.crt --user \"elastic:$$(cat /run/flare-secrets/elasticsearch.password)\" 'https://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=1s' >/dev/null"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 45s
+    restart: unless-stopped
+    networks: [observability-internal]
+
+  logstash:
+    image: docker.elastic.co/logstash/logstash:9.4.2@sha256:a0664a36744b4767b8648d24d1fa676f92349f24b69302879fcd7da0798b42fd
+    environment:
+      LS_JAVA_OPTS: -Xms768m -Xmx768m
+    volumes:
+      - ${OBSERVABILITY_ROOT_DIR:-..}/observability/logstash/config/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
+      - ${OBSERVABILITY_ROOT_DIR:-..}/observability/logstash/pipeline:/usr/share/logstash/pipeline:ro
+      - logstash-data:/usr/share/logstash/data
+      - ${OBSERVABILITY_ROOT_DIR:-..}/.secrets/observability/monitor/ca.crt:/usr/share/logstash/config/certs/ca.crt:ro
+      - ${OBSERVABILITY_ROOT_DIR:-..}/.secrets/observability/monitor/logstash.crt:/usr/share/logstash/config/certs/logstash.crt:ro
+      - ${OBSERVABILITY_ROOT_DIR:-..}/.secrets/observability/monitor/logstash.key:/usr/share/logstash/config/certs/logstash.key:ro
+      - ${OBSERVABILITY_ROOT_DIR:-..}/.secrets/observability/monitor/logstash.keystore:/usr/share/logstash/config/logstash.keystore:ro
+    ports:
+      - "${LOGSTASH_BIND_ADDRESS:-10.20.10.20}:5044:5044"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    mem_limit: 1500m
+    restart: unless-stopped
+    networks: [observability-internal]
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:9.4.2@sha256:862c968ad7dc3d4e51af83fa30b25c0556b235f54f5a8917284eab7cf322381f
+    environment:
+      SERVER_NAME: flare-monitor-kibana
+      SERVER_HOST: 0.0.0.0
+      ELASTICSEARCH_HOSTS: '["https://elasticsearch:9200"]'
+      ELASTICSEARCH_USERNAME: kibana_system
+      ELASTICSEARCH_SSL_CERTIFICATEAUTHORITIES: /usr/share/kibana/config/certs/ca.crt
+    volumes:
+      - ${OBSERVABILITY_ROOT_DIR:-..}/.secrets/observability/monitor/ca.crt:/usr/share/kibana/config/certs/ca.crt:ro
+      - ${OBSERVABILITY_ROOT_DIR:-..}/.secrets/observability/monitor/kibana.keystore:/usr/share/kibana/config/kibana.keystore:ro
+    ports:
+      - "127.0.0.1:5601:5601"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    mem_limit: 1250m
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent http://localhost:5601/api/status >/dev/null"]
+      interval: 20s
+      timeout: 10s
+      retries: 20
+      start_period: 45s
+    restart: unless-stopped
+    networks: [observability-internal]
+
+volumes:
+  logstash-data:
+
+networks:
+  observability-internal:
+    driver: bridge

@@ -1,0 +1,7 @@
+Skill: spring-explore
+Repository: https://github.com/Amplicode/spring-skills.git
+Commit: 2d64d7489d68cb720d37cfd1ca564da21a64f734
+Installed: 2026-07-15T13:28:57+07:00
+Scope: project
+Project: /home/quan/PBL4(UpdateFromPBL3)
+Scripts executed during installation: no

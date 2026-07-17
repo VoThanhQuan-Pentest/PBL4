@@ -1,0 +1,35 @@
+package com.flarefitness.backend.dto.auth;
+
+import jakarta.validation.constraints.Email;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
+
+public record RegisterRequest(
+        @NotBlank(message = "Tên đăng nhập là bắt buộc.")
+        @Size(min = 4, max = 100, message = "Tên đăng nhập phải từ 4 đến 100 ký tự.")
+        String username,
+        @NotBlank(message = "Họ tên là bắt buộc.")
+        @Size(max = 150, message = "Họ tên không được vượt quá 150 ký tự.")
+        String hoTen,
+        @NotBlank(message = "Email là bắt buộc.")
+        @Email(message = "Email không đúng định dạng.")
+        @Size(max = 150, message = "Email không được vượt quá 150 ký tự.")
+        String email,
+        @NotBlank(message = "Số điện thoại là bắt buộc.")
+        @Pattern(
+                regexp = "^(0|\\+84)(3|5|7|8|9)\\d{8}$",
+                message = "Số điện thoại phải là số di động Việt Nam hợp lệ, ví dụ 0935250037 hoặc +84935250037."
+        )
+        String sdt,
+        @NotBlank(message = "Mật khẩu là bắt buộc.")
+        @Size(min = 12, max = 128, message = "Mật khẩu phải có từ 12 đến 128 ký tự.")
+        String password,
+        @NotBlank(message = "Xác nhận mật khẩu là bắt buộc.")
+        @Size(max = 128, message = "Xác nhận mật khẩu không được vượt quá 128 ký tự.")
+        String confirmPassword,
+        @NotBlank(message = "Mã OTP là bắt buộc.")
+        @Size(min = 6, max = 6, message = "Mã OTP phải gồm 6 chữ số.")
+        String otpCode
+) {
+}

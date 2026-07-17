@@ -1,0 +1,26 @@
+{
+  "index_patterns": ["logs-nginx.parse_error-*"],
+  "priority": 500,
+  "data_stream": {},
+  "template": {
+    "settings": {
+      "index.number_of_shards": 1,
+      "index.number_of_replicas": 0
+    },
+    "lifecycle": {
+      "data_retention": "3d"
+    },
+    "mappings": {
+      "properties": {
+        "@timestamp": { "type": "date" },
+        "trace": { "properties": { "id": { "type": "keyword" } } },
+        "flare": { "properties": { "parse_error_reason": { "type": "keyword", "ignore_above": 2048 }, "original_timestamp": { "type": "keyword", "ignore_above": 256 } } },
+        "error": { "properties": { "message": { "type": "keyword", "ignore_above": 2048 }, "type": { "type": "keyword" } } }
+      }
+    }
+  },
+  "_meta": {
+    "description": "Flare AWS–ELK malformed Nginx event stream",
+    "managed_by": "observability/scripts/setup-elastic.sh"
+  }
+}

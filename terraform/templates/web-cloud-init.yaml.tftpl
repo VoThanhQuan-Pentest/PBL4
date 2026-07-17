@@ -1,0 +1,46 @@
+#cloud-config
+package_update: true
+package_upgrade: false
+packages:
+  - ca-certificates
+  - curl
+  - git
+  - jq
+  - logrotate
+  - rsync
+  - ufw
+  - docker.io
+  - docker-compose-v2
+
+write_files:
+  - path: /etc/ssh/sshd_config.d/60-flare-hardening.conf
+    owner: root:root
+    permissions: '0600'
+    content: |
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      ChallengeResponseAuthentication no
+      X11Forwarding no
+  - path: /etc/docker/daemon.json
+    owner: root:root
+    permissions: '0644'
+    content: |
+      {"live-restore": true, "log-driver": "local", "log-opts": {"max-size": "10m", "max-file": "3"}}
+
+runcmd:
+  - systemctl enable --now docker
+  - systemctl restart ssh
+  - usermod -aG docker ubuntu
+  - install -d -m 0750 -o ubuntu -g ubuntu /opt/flare /opt/flare/nginx-logs
+  - ufw --force reset
+  - ufw default deny incoming
+  - ufw default allow outgoing
+%{ for cidr in admin_cidrs ~}
+  - ufw allow from ${cidr} to any port 22 proto tcp
+%{ endfor ~}
+%{ for cidr in tester_cidrs ~}
+  - ufw allow from ${cidr} to any port 80 proto tcp
+%{ endfor ~}
+  - ufw --force enable
+  - systemctl restart docker

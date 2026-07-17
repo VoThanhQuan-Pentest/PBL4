@@ -1,0 +1,73 @@
+#cloud-config
+package_update: true
+package_upgrade: false
+packages:
+  - ca-certificates
+  - curl
+  - git
+  - jq
+  - logrotate
+  - rsync
+  - ufw
+  - docker.io
+  - docker-compose-v2
+
+write_files:
+  - path: /etc/ssh/sshd_config.d/60-flare-hardening.conf
+    owner: root:root
+    permissions: '0600'
+    content: |
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      ChallengeResponseAuthentication no
+      X11Forwarding no
+  - path: /etc/sysctl.d/60-flare-elasticsearch.conf
+    owner: root:root
+    permissions: '0644'
+    content: |
+      vm.max_map_count=1048576
+  - path: /etc/docker/daemon.json
+    owner: root:root
+    permissions: '0644'
+    content: |
+      {"live-restore": true, "log-driver": "local", "log-opts": {"max-size": "10m", "max-file": "3"}}
+
+runcmd:
+  - sysctl --system
+  - swapoff -a
+  - sed -ri '/\sswap\s/s/^#?/#/' /etc/fstab
+  - systemctl enable --now docker
+  - systemctl restart ssh
+  - usermod -aG docker ubuntu
+  - install -d -m 0750 -o ubuntu -g ubuntu /opt/flare /srv/elastic
+  - |
+    set -eu
+    expected_serial='${replace(monitor_data_volume_id, "-", "")}'
+    for attempt in $(seq 1 60); do
+      device=''
+      for candidate in /dev/nvme*n1; do
+        [ -b "$candidate" ] || continue
+        if [ "$(lsblk -ndo SERIAL "$candidate" 2>/dev/null || true)" = "$expected_serial" ]; then
+          device="$candidate"
+          break
+        fi
+      done
+      [ -n "$device" ] && break
+      sleep 2
+    done
+    [ -n "$${device:-}" ] || { echo 'Monitor EBS data volume did not attach'; exit 1; }
+    if ! blkid "$device" >/dev/null 2>&1; then mkfs.ext4 -F "$device"; fi
+    uuid=$(blkid -s UUID -o value "$device")
+    grep -q " $${uuid} /srv/elastic " /etc/fstab || echo "UUID=$${uuid} /srv/elastic ext4 defaults,nofail 0 2" >> /etc/fstab
+    mountpoint -q /srv/elastic || mount /srv/elastic
+    chown 1000:1000 /srv/elastic
+  - ufw --force reset
+  - ufw default deny incoming
+  - ufw default allow outgoing
+%{ for cidr in admin_cidrs ~}
+  - ufw allow from ${cidr} to any port 22 proto tcp
+%{ endfor ~}
+  - ufw allow from ${web_private_ip} to any port 5044 proto tcp
+  - ufw --force enable
+  - systemctl restart docker

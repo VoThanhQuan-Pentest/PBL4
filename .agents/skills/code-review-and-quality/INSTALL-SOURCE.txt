@@ -1,0 +1,7 @@
+Skill: code-review-and-quality
+Repository: https://github.com/addyosmani/agent-skills.git
+Commit: 98967c45a42b88d6b8fb3a88b7ff6273920763d6
+Installed: 2026-07-15T13:28:57+07:00
+Scope: project
+Project: /home/quan/PBL4(UpdateFromPBL3)
+Scripts executed during installation: no

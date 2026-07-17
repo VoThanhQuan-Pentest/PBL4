@@ -1,0 +1,54 @@
+{
+  "index_patterns": ["logs-nginx.access-*"],
+  "priority": 500,
+  "data_stream": {},
+  "template": {
+    "settings": {
+      "index.number_of_shards": 1,
+      "index.number_of_replicas": 0
+    },
+    "lifecycle": {
+      "data_retention": "7d"
+    },
+    "mappings": {
+      "dynamic": true,
+      "properties": {
+        "@timestamp": { "type": "date" },
+        "trace": { "properties": { "id": { "type": "keyword" } } },
+        "source": {
+          "properties": {
+            "ip": { "type": "ip" },
+            "geo": {
+              "properties": {
+                "location": { "type": "geo_point" },
+                "country_iso_code": { "type": "keyword" },
+                "city_name": { "type": "keyword" }
+              }
+            },
+            "as": {
+              "properties": {
+                "number": { "type": "long" },
+                "organization": { "properties": { "name": { "type": "keyword" } } }
+              }
+            }
+          }
+        },
+        "http": {
+          "properties": {
+            "request": { "properties": { "method": { "type": "keyword" }, "bytes": { "type": "long" } } },
+            "response": { "properties": { "status_code": { "type": "integer" }, "body": { "properties": { "bytes": { "type": "long" } } } } }
+          }
+        },
+        "url": { "properties": { "path": { "type": "keyword" }, "query": { "type": "keyword", "ignore_above": 1024 }, "original": { "type": "wildcard" } } },
+        "user_agent": { "properties": { "original": { "type": "keyword", "ignore_above": 2048 } } },
+        "event": { "properties": { "duration": { "type": "long" }, "outcome": { "type": "keyword" } } },
+        "nginx": { "properties": { "upstream": { "properties": { "status_code": { "type": "keyword" }, "response_time": { "type": "keyword" } } } } },
+        "flare": { "properties": { "detection": { "properties": { "type": { "type": "keyword" }, "severity": { "type": "keyword" }, "reason": { "type": "keyword" } } }, "source_ip_scope": { "type": "keyword" } } }
+      }
+    }
+  },
+  "_meta": {
+    "description": "Flare AWS–ELK Nginx access ECS data stream",
+    "managed_by": "observability/scripts/setup-elastic.sh"
+  }
+}

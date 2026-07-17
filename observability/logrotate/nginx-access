@@ -1,0 +1,15 @@
+/opt/flare/nginx-logs/*.log {
+    daily
+    size 10M
+    rotate 7
+    missingok
+    notifempty
+    compress
+    delaycompress
+    dateext
+    create 0640 root root
+    sharedscripts
+    postrotate
+        /usr/bin/docker compose --project-name flare --project-directory /opt/flare kill -s USR1 nginx >/dev/null 2>&1 || true
+    endscript
+}

@@ -1,0 +1,7 @@
+Skill: spring-planning
+Repository: https://github.com/Amplicode/spring-skills.git
+Commit: 79e0e9c9aa1f8d23fbb2625d1d8c0780584f3a71
+Installed: 2026-07-13T19:27:01+07:00
+Scope: project
+Project: /home/quan/PBL4(UpdateFromPBL3)
+Scripts executed during installation: no

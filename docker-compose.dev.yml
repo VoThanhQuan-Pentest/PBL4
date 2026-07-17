@@ -1,0 +1,5 @@
+services:
+  app:
+    environment:
+      # Dev fixtures are repeatable Flyway migrations, never MySQL init scripts.
+      SPRING_PROFILES_ACTIVE: dev

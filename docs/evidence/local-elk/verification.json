@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "stack_version": "9.4.2",
+  "synthetic_data_only": true,
+  "started_at": "2026-07-17T04:10:44Z",
+  "checks": [
+    {
+      "name": "mapping_lifecycle",
+      "passed": true,
+      "detail": "geo_point mapping, access 7d, parse-error 3d"
+    },
+    {
+      "name": "pipeline_latency_redaction",
+      "passed": true,
+      "detail": "arrival <=15s, XFF ignored, query redacted and body absent"
+    },
+    {
+      "name": "geoip_scope",
+      "passed": true,
+      "detail": "public City/ASN enrichment and TEST-NET exclusion verified"
+    },
+    {
+      "name": "parse_error",
+      "passed": true,
+      "detail": "malformed timestamp and numeric fields were quarantined with a reason"
+    },
+    {
+      "name": "deduplication",
+      "passed": true,
+      "detail": "two deliveries with the same trace.id produced one document"
+    },
+    {
+      "name": "queue_resilience",
+      "passed": true,
+      "detail": "Filebeat outage buffer delivered all events; Logstash restart did not duplicate them"
+    },
+    {
+      "name": "detection_alerts",
+      "passed": true,
+      "detail": "all six rule IDs produced alerts from localhost synthetic scenarios"
+    },
+    {
+      "name": "kibana_import",
+      "passed": true,
+      "detail": "saved objects and six rules imported twice with overwrite"
+    },
+    {
+      "name": "analyst_role",
+      "passed": true,
+      "detail": "analyst can read all dashboards; role exposes only read privileges"
+    },
+    {
+      "name": "container_secrets_ports",
+      "passed": true,
+      "detail": "no raw observability secret in inspect; 9200/9300 unpublished"
+    }
+  ],
+  "finished_at": "2026-07-17T04:12:13Z",
+  "passed": true
+}

@@ -1,0 +1,43 @@
+# Filebeat runs on the Web EC2. It tails the Nginx bind-mounted JSON log and
+# persists its registry/disk queue, so a Monitor outage does not lose events.
+filebeat.inputs:
+  - type: filestream
+    id: flare-nginx-access-json
+    enabled: true
+    paths:
+      - /var/log/nginx/access.json.log
+    # Filebeat 9 defaults to a 1024-byte fingerprint, which delays a brand-new
+    # low-traffic access log. Every allowed Nginx JSON event is longer than 64
+    # bytes, so this keeps fingerprint identity while meeting the 15s SLO.
+    prospector.scanner.fingerprint.length: 64
+    parsers:
+      - ndjson:
+          target: ""
+          overwrite_keys: true
+          expand_keys: true
+          add_error_key: true
+    fields_under_root: true
+    fields:
+      event.dataset: nginx.access
+      data_stream.type: logs
+      data_stream.dataset: nginx.access
+      data_stream.namespace: lab
+
+# A disk queue (not a memory-only buffer) survives a Filebeat restart and gives
+# the Web host 1 GB of back-pressure room while Logstash is unavailable.
+queue.disk:
+  path: ${path.data}/diskqueue
+  max_size: 1GB
+  read_ahead: 512
+  write_ahead: 2048
+
+output.logstash:
+  hosts: ["${LOGSTASH_HOSTS:10.20.10.20:5044}"]
+  ssl.certificate_authorities: ["/usr/share/filebeat/certs/ca.crt"]
+  ssl.certificate: "/usr/share/filebeat/certs/filebeat-web.crt"
+  ssl.key: "/usr/share/filebeat/certs/filebeat-web.key"
+  ssl.verification_mode: full
+  ssl.supported_protocols: [TLSv1.2, TLSv1.3]
+
+logging.level: info
+logging.to_files: false

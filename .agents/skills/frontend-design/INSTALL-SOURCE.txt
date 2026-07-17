@@ -1,0 +1,7 @@
+Skill: frontend-design
+Repository: https://github.com/anthropics/skills.git
+Commit: 9d2f1ae187231d8199c64b5b762e1bdf2244733d
+Installed: 2026-07-15T13:28:57+07:00
+Scope: project
+Project: /home/quan/PBL4(UpdateFromPBL3)
+Scripts executed during installation: no

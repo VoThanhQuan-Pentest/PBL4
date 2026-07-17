@@ -1,0 +1,7 @@
+Skill: context-compression
+Repository: https://github.com/muratcankoylan/Agent-Skills-for-Context-Engineering.git
+Commit: 47902b0bbffdb229992c543038aa57578eedfb5f
+Installed: 2026-07-13T19:27:01+07:00
+Scope: project
+Project: /home/quan/PBL4(UpdateFromPBL3)
+Scripts executed during installation: no

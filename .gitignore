@@ -1,0 +1,30 @@
+.vscode/*
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/extensions.json
+tmp_index.html
+tmp_style.css
+tmp_main.js
+.env
+backend/target/
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
+frontend/playwright-report/
+frontend/test-results/
+tmp_vn_units*.json
+# Local Terraform state, generated PKI, Elastic data and bind-mounted runtime
+# logs are deployment artefacts. Templates and examples stay committed.
+.terraform/
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+terraform.tfvars.json
+*.pem
+*.key
+*.p12
+*.pfx
+.secrets/
+observability/runtime/
+observability/data/
+nginx-logs/

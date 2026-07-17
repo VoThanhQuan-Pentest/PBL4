@@ -1,0 +1,16 @@
+# Copy to terraform.tfvars locally. This file is ignored because it includes
+# your address ranges and public key, never a private key or application secret.
+admin_cidrs  = ["198.51.100.10/32"]
+tester_cidrs = ["198.51.100.20/32"]
+ssh_public_key = "ssh-ed25519 AAAA... replace-with-your-public-key admin@laptop"
+budget_email = "team@example.test"
+
+# Optional defaults shown explicitly for a reproducible lab.
+aws_region             = "ap-southeast-1"
+project_name           = "flare-aws-elk-lab"
+web_instance_type      = "t3.medium"
+monitor_instance_type  = "t3.large"
+web_root_volume_gb     = 40
+monitor_root_volume_gb = 20
+monitor_data_volume_gb = 80
+monthly_budget_usd     = 40

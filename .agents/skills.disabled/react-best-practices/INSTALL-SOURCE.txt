@@ -1,0 +1,7 @@
+Skill: react-best-practices
+Repository: https://github.com/vercel-labs/agent-skills.git
+Commit: f8a72b9603728bb92a217a879b7e62e43ad76c81
+Installed: 2026-07-13T19:27:01+07:00
+Scope: project
+Project: /home/quan/PBL4(UpdateFromPBL3)
+Scripts executed during installation: no

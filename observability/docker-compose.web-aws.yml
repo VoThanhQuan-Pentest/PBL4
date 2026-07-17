@@ -1,0 +1,20 @@
+# AWS Web-only override. The base Compose file remains convenient for local
+# development; this override makes Nginx logs host-visible for rename/create
+# logrotate and keeps Filebeat's registry/certificates outside named volumes.
+services:
+  nginx:
+    volumes:
+      - /opt/flare/nginx-logs:/var/log/nginx
+
+  filebeat:
+    volumes:
+      - /opt/flare/nginx-logs:/var/log/nginx:ro
+      - /opt/flare/filebeat-data:/var/lib/filebeat
+      - /opt/flare/observability/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - /opt/flare/.secrets/observability/web/ca.crt:/usr/share/filebeat/certs/ca.crt:ro
+      - /opt/flare/.secrets/observability/web/filebeat-web.crt:/usr/share/filebeat/certs/filebeat-web.crt:ro
+      - /opt/flare/.secrets/observability/web/filebeat-web.key:/usr/share/filebeat/certs/filebeat-web.key:ro
+
+  filebeat-data-init:
+    volumes:
+      - /opt/flare/filebeat-data:/var/lib/filebeat
