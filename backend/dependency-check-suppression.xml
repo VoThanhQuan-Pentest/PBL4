@@ -6,12 +6,12 @@
     <suppress until="2027-08-01Z">
         <notes><![CDATA[
         CVE-2026-56816 affects io.netty:netty-codec-http3 through 4.2.15.Final.
-        This project uses io.netty:netty-transport 4.1.136.Final, which is a
-        different artifact and does not contain the vulnerable HTTP/3 codec.
+        This project uses the netty-transport and netty-transport-native-unix-common
+        4.1.136.Final artifacts, neither of which contains the vulnerable HTTP/3 codec.
         Upstream advisory: https://github.com/netty/netty/security/advisories/GHSA-hpcc-26xq-25fv
         Review by 2027-08-01.
         ]]></notes>
-        <packageUrl regex="true">^pkg:maven/io\.netty/netty-transport@4\.1\.136\.Final$</packageUrl>
+        <packageUrl regex="true">^pkg:maven/io\.netty/netty-(transport|transport-native-unix-common)@4\.1\.136\.Final$</packageUrl>
         <cve>CVE-2026-56816</cve>
     </suppress>
 </suppressions>
