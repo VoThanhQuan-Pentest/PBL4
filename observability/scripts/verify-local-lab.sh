@@ -70,8 +70,19 @@ trace=$(awk 'BEGIN{IGNORECASE=1} /^X-Request-ID:/ {gsub("\r", "", $2); print $2}
 [ -n "$trace" ] || fail pipeline_latency 'missing X-Request-ID response header'
 wait_trace "$trace" 15 || fail pipeline_latency 'request did not arrive within 15 seconds'
 doc=$(get_trace "$trace")
-printf '%s' "$doc" | jq -e '.hits.hits[0]._source.source.ip != "8.8.8.8" and .hits.hits[0]._source.url.query=="[REDACTED]" and (tostring|contains("synthetic-secret-marker")|not) and (.hits.hits[0]._source|has("body")|not)' >/dev/null || fail redaction_proxy 'spoofed XFF or query/body leakage detected'
-pass pipeline_latency_redaction 'arrival <=15s, XFF ignored, query redacted and body absent'
+printf '%s' "$doc" | jq -e '.hits.hits[0]._source.source.ip != "8.8.8.8" and .hits.hits[0]._source.url.query=="[REDACTED]" and (tostring|contains("synthetic-secret-marker")|not) and (.hits.hits[0]._source|has("body")|not) and ((.hits.hits[0]._source.flare // {})|has("detection")|not)' >/dev/null || fail redaction_proxy 'spoofed XFF, query/body leakage or an empty detection object was detected'
+pass pipeline_latency_redaction 'arrival <=15s, XFF ignored, query redacted, body absent and blank detection removed'
+
+# Removing Nginx's blank detection object must leave the scanner-UA enrichment
+# path available rather than suppressing it with an empty-but-existing field.
+for scanner_agent in 'Nikto synthetic verifier' 'ffuf synthetic verifier' 'dirb synthetic verifier'; do
+  curl --fail --silent --show-error -D "$headers" -o /dev/null -A "$scanner_agent" "${WEB_URL}/?scanner=synthetic"
+  scanner_trace=$(awk 'BEGIN{IGNORECASE=1} /^X-Request-ID:/ {gsub("\r", "", $2); print $2}' "$headers" | tail -n 1)
+  [ -n "$scanner_trace" ] || fail scanner_enrichment "missing X-Request-ID for ${scanner_agent}"
+  wait_trace "$scanner_trace" 15 || fail scanner_enrichment "${scanner_agent} did not arrive within 15 seconds"
+  get_trace "$scanner_trace" | jq -e '.hits.hits[0]._source.flare.detection.type=="scanner_user_agent" and .hits.hits[0]._source.flare.detection.severity=="medium" and .hits.hits[0]._source.flare.detection.reason=="User-Agent matched a scanner heuristic"' >/dev/null || fail scanner_enrichment "scanner enrichment failed for ${scanner_agent}"
+done
+pass scanner_enrichment 'Nikto, ffuf and dirb were enriched after blank detection cleanup'
 
 # Public GeoIP and explicit reserved CIDR classification.
 public_trace="verify-public-$(date +%s)"
@@ -136,7 +147,7 @@ for number in $(seq 1 25); do curl --silent --output /dev/null --max-time 5 "${W
 LOCAL_FIXTURE_CONFIRM=yes "${ROOT_DIR}/observability/scripts/replay-5xx-fixture.sh" >/dev/null
 curl --silent --output /dev/null --path-as-is "${WEB_URL}/?q=%27%20union%20select%20synthetic" || true
 curl --silent --output /dev/null --path-as-is "${WEB_URL}/?q=%3Cscript%3Esynthetic%3C%2Fscript%3E" || true
-curl --silent --output /dev/null --path-as-is "${WEB_URL}/%2e%2e%2fsynthetic" || true
+curl --silent --output /dev/null --path-as-is "${WEB_URL}/?file=..%2F..%2Fetc%2Fpasswd" || true
 curl --silent --output /dev/null -A 'Nikto synthetic verifier' "${WEB_URL}/" || true
 
 expected_rules='["flare-lab-auth-bruteforce","flare-lab-high-request-rate","flare-lab-high-web-heuristic","flare-lab-scanner-user-agent","flare-lab-server-errors","flare-lab-web-scan-404"]'

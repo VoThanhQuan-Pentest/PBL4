@@ -88,25 +88,69 @@ jobs:
   dependency-audit:
     name: Maven dependency audit
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      TRUSTED_NVD_AUDIT: ${{ (github.event_name == 'push' && github.actor != 'dependabot[bot]') || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') }}
     defaults:
       run:
         working-directory: backend
     steps:
+      - name: Explain the untrusted pull-request audit policy
+        if: env.TRUSTED_NVD_AUDIT != 'true'
+        working-directory: ${{ github.workspace }}
+        run: >-
+          echo "::notice title=NVD audit deferred::Fork and Dependabot-triggered workflows do not receive repository Actions secrets. Dependency review still runs where available; the keyed NVD audit runs after a trusted non-Dependabot push or through workflow_dispatch."
       - name: Check out source
+        if: env.TRUSTED_NVD_AUDIT == 'true'
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Set up Java
+        if: env.TRUSTED_NVD_AUDIT == 'true'
         uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
         with:
           distribution: temurin
           java-version: '21'
           cache: maven
+      - name: Build the daily Dependency-Check cache key
+        if: env.TRUSTED_NVD_AUDIT == 'true'
+        id: dependency-check-cache-key
+        run: echo "day=$(/bin/date -u +%F)" >> "$GITHUB_OUTPUT"
+      - name: Restore the Dependency-Check vulnerability database
+        if: env.TRUSTED_NVD_AUDIT == 'true'
+        id: dependency-check-cache
+        uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: ${{ runner.temp }}/dependency-check-data
+          key: ${{ runner.os }}-dependency-check-v12-${{ hashFiles('backend/pom.xml') }}-${{ steps.dependency-check-cache-key.outputs.day }}
+          restore-keys: |
+            ${{ runner.os }}-dependency-check-v12-${{ hashFiles('backend/pom.xml') }}-
+            ${{ runner.os }}-dependency-check-v12-
+      - name: Update the Dependency-Check vulnerability database
+        if: env.TRUSTED_NVD_AUDIT == 'true'
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+        run: >-
+          test -n "$NVD_API_KEY" ||
+          { echo "::error title=Missing NVD API key::Add an NVD_API_KEY repository secret so Dependency-Check can update without exceeding NVD rate limits."; exit 1; };
+          mvn -B -ntp org.owasp:dependency-check-maven:12.2.2:update-only
+          -DnvdApiKeyEnvironmentVariable=NVD_API_KEY
+          -DdataDirectory=${{ runner.temp }}/dependency-check-data
+          -DnvdValidForHours=24
+      - name: Save the updated Dependency-Check vulnerability database
+        if: env.TRUSTED_NVD_AUDIT == 'true' && steps.dependency-check-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: ${{ runner.temp }}/dependency-check-data
+          key: ${{ runner.os }}-dependency-check-v12-${{ hashFiles('backend/pom.xml') }}-${{ steps.dependency-check-cache-key.outputs.day }}
       - name: Scan Maven dependencies for CVEs
+        if: env.TRUSTED_NVD_AUDIT == 'true'
         run: >-
           mvn -B -ntp org.owasp:dependency-check-maven:12.2.2:check
+          -DautoUpdate=false
+          -DdataDirectory=${{ runner.temp }}/dependency-check-data
           -DfailBuildOnCVSS=7
           -Dformat=HTML,JSON
       - name: Upload dependency audit report
-        if: always()
+        if: always() && env.TRUSTED_NVD_AUDIT == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: dependency-check-report

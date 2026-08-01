@@ -2,7 +2,7 @@
   "schema_version": 1,
   "stack_version": "9.4.2",
   "synthetic_data_only": true,
-  "started_at": "2026-07-17T04:10:44Z",
+  "started_at": "2026-07-29T11:21:35Z",
   "checks": [
     {
       "name": "mapping_lifecycle",
@@ -12,7 +12,12 @@
     {
       "name": "pipeline_latency_redaction",
       "passed": true,
-      "detail": "arrival <=15s, XFF ignored, query redacted and body absent"
+      "detail": "arrival <=15s, XFF ignored, query redacted, body absent and blank detection removed"
+    },
+    {
+      "name": "scanner_enrichment",
+      "passed": true,
+      "detail": "Nikto, ffuf and dirb were enriched after blank detection cleanup"
     },
     {
       "name": "geoip_scope",
@@ -55,6 +60,6 @@
       "detail": "no raw observability secret in inspect; 9200/9300 unpublished"
     }
   ],
-  "finished_at": "2026-07-17T04:12:13Z",
+  "finished_at": "2026-07-29T11:23:25Z",
   "passed": true
 }

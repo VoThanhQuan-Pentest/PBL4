@@ -1,5 +1,7 @@
 package com.flarefitness.backend.config;
 
+import jakarta.mail.internet.AddressException;
+import jakarta.mail.internet.InternetAddress;
 import java.net.URI;
 import java.util.Arrays;
 import java.util.Locale;
@@ -26,6 +28,13 @@ public class ProductionSecurityConfigurationValidator implements InitializingBea
     private final String datasourceUsername;
     private final String datasourcePassword;
     private final String redisPassword;
+    private final String mailHost;
+    private final String mailUsername;
+    private final String mailPassword;
+    private final String mailFrom;
+    private final boolean mailSmtpAuth;
+    private final boolean mailStartTlsEnabled;
+    private final boolean mailStartTlsRequired;
     private final String trustedProxyCidrs;
 
     public ProductionSecurityConfigurationValidator(
@@ -37,6 +46,13 @@ public class ProductionSecurityConfigurationValidator implements InitializingBea
             @Value("${spring.datasource.username}") String datasourceUsername,
             @Value("${spring.datasource.password}") String datasourcePassword,
             @Value("${spring.data.redis.password}") String redisPassword,
+            @Value("${spring.mail.host:}") String mailHost,
+            @Value("${spring.mail.username:}") String mailUsername,
+            @Value("${spring.mail.password:}") String mailPassword,
+            @Value("${app.mail.from:}") String mailFrom,
+            @Value("${spring.mail.properties.mail.smtp.auth:true}") boolean mailSmtpAuth,
+            @Value("${spring.mail.properties.mail.smtp.starttls.enable:true}") boolean mailStartTlsEnabled,
+            @Value("${spring.mail.properties.mail.smtp.starttls.required:true}") boolean mailStartTlsRequired,
             @Value("${app.security.trusted-proxy-cidrs}") String trustedProxyCidrs
     ) {
         this.environment = environment;
@@ -47,6 +63,13 @@ public class ProductionSecurityConfigurationValidator implements InitializingBea
         this.datasourceUsername = datasourceUsername;
         this.datasourcePassword = datasourcePassword;
         this.redisPassword = redisPassword;
+        this.mailHost = mailHost;
+        this.mailUsername = mailUsername;
+        this.mailPassword = mailPassword;
+        this.mailFrom = mailFrom;
+        this.mailSmtpAuth = mailSmtpAuth;
+        this.mailStartTlsEnabled = mailStartTlsEnabled;
+        this.mailStartTlsRequired = mailStartTlsRequired;
         this.trustedProxyCidrs = trustedProxyCidrs;
     }
 
@@ -56,11 +79,13 @@ public class ProductionSecurityConfigurationValidator implements InitializingBea
             return;
         }
 
+        validateProductionProfileIsolation();
         validateSecureCookie();
         validateJwtSecret();
         validateCorsOrigins();
         validateExternalDatasourceTls();
         validateServiceCredentials();
+        validateMailConfiguration();
         validateTrustedProxyCidrs();
     }
 
@@ -68,6 +93,16 @@ public class ProductionSecurityConfigurationValidator implements InitializingBea
         return Arrays.stream(environment.getActiveProfiles())
                 .map(String::trim)
                 .anyMatch(profile -> "prod".equalsIgnoreCase(profile) || "production".equalsIgnoreCase(profile));
+    }
+
+    private void validateProductionProfileIsolation() {
+        boolean fixtureProfileActive = Arrays.stream(environment.getActiveProfiles())
+                .map(String::trim)
+                .anyMatch(profile -> "dev".equalsIgnoreCase(profile) || "e2e".equalsIgnoreCase(profile));
+        if (fixtureProfileActive) {
+            throw new IllegalStateException(
+                    "The prod/production profile must not be combined with development or end-to-end fixture profiles.");
+        }
     }
 
     private void validateSecureCookie() {
@@ -128,6 +163,31 @@ public class ProductionSecurityConfigurationValidator implements InitializingBea
         validateServiceSecret("SPRING_DATA_REDIS_PASSWORD", redisPassword);
     }
 
+    private void validateMailConfiguration() {
+        if (!mailSmtpAuth || !mailStartTlsEnabled || !mailStartTlsRequired) {
+            throw new IllegalStateException(
+                    "Production SMTP must require authentication and STARTTLS.");
+        }
+
+        if (isUnsafeProductionMailHost(mailHost)) {
+            throw new IllegalStateException(
+                    "SPRING_MAIL_HOST must identify a non-local SMTP server in production.");
+        }
+
+        String normalizedUsername = normalize(mailUsername);
+        if (!StringUtils.hasText(normalizedUsername) || containsLineBreak(normalizedUsername)) {
+            throw new IllegalStateException(
+                    "APP_MAIL_USERNAME must contain the production SMTP account username.");
+        }
+
+        validateServiceSecret("APP_MAIL_PASSWORD", mailPassword);
+
+        if (!isValidSingleMailbox(mailFrom)) {
+            throw new IllegalStateException(
+                    "APP_MAIL_FROM must contain one valid production sender mailbox.");
+        }
+    }
+
     private void validateTrustedProxyCidrs() {
         String normalized = normalize(trustedProxyCidrs);
         if (!StringUtils.hasText(normalized)) {
@@ -146,7 +206,10 @@ public class ProductionSecurityConfigurationValidator implements InitializingBea
 
     private static void validateServiceSecret(String propertyName, String value) {
         String normalized = normalize(value);
-        if (normalized.length() < 16 || isPlaceholderSecret(normalized) || isCommonInsecureSecret(normalized)) {
+        if (normalized.length() < 16
+                || normalized.chars().distinct().count() < 8
+                || isPlaceholderSecret(normalized)
+                || isCommonInsecureSecret(normalized)) {
             throw new IllegalStateException(
                     propertyName + " must be a non-default random value of at least 16 characters in production.");
         }
@@ -170,6 +233,47 @@ public class ProductionSecurityConfigurationValidator implements InitializingBea
                 || "secret".equals(normalized)
                 || "redis".equals(normalized)
                 || "mysql".equals(normalized);
+    }
+
+    private static boolean isUnsafeProductionMailHost(String configuredHost) {
+        String host = normalize(configuredHost).toLowerCase(Locale.ROOT);
+        return !StringUtils.hasText(host)
+                || host.chars().anyMatch(Character::isWhitespace)
+                || host.contains("://")
+                || host.contains("/")
+                || "localhost".equals(host)
+                || "[::1]".equals(host)
+                || "::1".equals(host)
+                || "0.0.0.0".equals(host)
+                || "mailpit".equals(host)
+                || "mailhog".equals(host)
+                || host.startsWith("127.")
+                || host.endsWith(".localhost")
+                || host.endsWith(".example")
+                || host.endsWith(".invalid")
+                || host.endsWith(".test");
+    }
+
+    private static boolean isValidSingleMailbox(String configuredAddress) {
+        String address = normalize(configuredAddress);
+        if (!StringUtils.hasText(address) || containsLineBreak(address)) {
+            return false;
+        }
+
+        try {
+            InternetAddress[] parsedAddresses = InternetAddress.parse(address, true);
+            if (parsedAddresses.length != 1 || parsedAddresses[0].isGroup()) {
+                return false;
+            }
+            parsedAddresses[0].validate();
+            return StringUtils.hasText(parsedAddresses[0].getAddress());
+        } catch (AddressException exception) {
+            return false;
+        }
+    }
+
+    private static boolean containsLineBreak(String value) {
+        return value.indexOf('\r') >= 0 || value.indexOf('\n') >= 0;
     }
 
     private static void validateHttpsOrigin(String origin) {

@@ -1,6 +1,7 @@
 package com.flarefitness.backend.service.support;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -15,6 +16,7 @@ import com.flarefitness.backend.entity.Customer;
 import com.flarefitness.backend.entity.User;
 import com.flarefitness.backend.entity.support.SupportMessage;
 import com.flarefitness.backend.entity.support.SupportThread;
+import com.flarefitness.backend.exception.UnauthorizedException;
 import com.flarefitness.backend.repository.CustomerRepository;
 import com.flarefitness.backend.repository.UserRepository;
 import com.flarefitness.backend.repository.support.SupportMessageRepository;
@@ -31,6 +33,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 
@@ -125,6 +128,21 @@ class SupportChatServiceTest {
             assertThat(saved.id()).isEqualTo("message-1");
             assertThat(saved.sender()).isEqualTo("staff");
         });
+    }
+
+    @Test
+    void authenticatedChannelRoleDenialsAreForbiddenWhileMissingAuthenticationIsUnauthorized() {
+        assertThatThrownBy(() -> service.getThreadsForWorkspacePage(customerAuthentication, 0, 20))
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessageContaining("khong co quyen");
+
+        assertThatThrownBy(() -> service.getCurrentCustomerThread(staffAuthentication, false))
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessageContaining("khong su dung kenh");
+
+        assertThatThrownBy(() -> service.getCurrentCustomerThread(null, false))
+                .isInstanceOf(UnauthorizedException.class)
+                .hasMessageContaining("dang nhap");
     }
 
     private User user(String id, String username, String role) {

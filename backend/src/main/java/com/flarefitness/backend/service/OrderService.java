@@ -41,6 +41,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -828,7 +829,7 @@ public class OrderService {
                 .map(customer -> String.valueOf(customer.getId()).equals(String.valueOf(order.getCustomerId())))
                 .orElse(false);
         if (!belongsToUser && !belongsToCustomer) {
-            throw new UnauthorizedException("Ban khong co quyen thao tac voi don hang nay.");
+            throw new AccessDeniedException("Ban khong co quyen thao tac voi don hang nay.");
         }
         return order;
     }
@@ -844,7 +845,7 @@ public class OrderService {
         User user = requireUser(authentication);
         String authority = CurrentUserPrincipal.toAuthority(user.getRole());
         if ("ROLE_ADMIN".equals(authority) || "ROLE_STAFF".equals(authority)) {
-            throw new UnauthorizedException("Nhan vien va quan tri vien khong duoc dat hang.");
+            throw new AccessDeniedException("Nhan vien va quan tri vien khong duoc dat hang.");
         }
         return user;
     }
@@ -853,7 +854,7 @@ public class OrderService {
         User user = requireUser(authentication);
         String authority = CurrentUserPrincipal.toAuthority(user.getRole());
         if (!"ROLE_ADMIN".equals(authority) && !"ROLE_STAFF".equals(authority)) {
-            throw new UnauthorizedException("Chi nhan vien va quan tri vien duoc xu ly don hang.");
+            throw new AccessDeniedException("Chi nhan vien va quan tri vien duoc xu ly don hang.");
         }
         return user;
     }

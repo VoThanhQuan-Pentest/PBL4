@@ -8,7 +8,7 @@ Yeu cau: Docker Desktop hoac Docker Engine co Compose v2.
 
 ```sh
 cp .env.example .env
-# Điền APP_MAIL_* trong .env nếu cần gửi OTP qua SMTP.
+# Điền APP_MAIL_* trong .env trước khi kiểm thử đăng ký/đặt lại mật khẩu qua OTP.
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
 ```
 
@@ -18,10 +18,10 @@ Sau khi health check thanh cong:
 - API health: `http://localhost/api/health`
 - MySQL (chi loopback): `localhost:3307`
 
-Dừng và xóa dữ liệu phát triển:
+Dừng stack và giữ nguyên dữ liệu phát triển:
 
 ```sh
-docker compose -f docker-compose.yml -f docker-compose.dev.yml down -v
+docker compose -f docker-compose.yml -f docker-compose.dev.yml down
 ```
 
 `docker-compose.dev.yml` kích hoạt profile Spring `dev`; các tài khoản và sản phẩm
@@ -53,7 +53,7 @@ Backend dung Testcontainers (MySQL va Redis), khong phu thuoc dich vu local:
 
 ```sh
 cd backend
-./mvnw test
+mvn -B test
 ```
 
 E2E dùng stack tách biệt, Mailpit và fixture chỉ được nạp sau schema Flyway khi
@@ -70,7 +70,7 @@ E2E_BASE_URL=http://127.0.0.1:8088 npm run test:e2e
 
 cd ..
 docker compose -p flare-e2e --env-file .env.e2e.example \
-  -f docker-compose.yml -f docker-compose.e2e.yml down -v
+  -f docker-compose.yml -f docker-compose.e2e.yml down
 ```
 
 Playwright mac dinh dung Chromium do Playwright quan ly, khong phu thuoc
@@ -109,9 +109,13 @@ Hai EC2, Filebeat mTLS, Elasticsearch/Logstash/Kibana, GeoIP và detection rules
 được triển khai theo [PLAN_AWS_ELK.md](PLAN_AWS_ELK.md). Đây là HTTP lab bị giới
 hạn bằng CIDR; không thay thế production có TLS.
 
+Kết quả kiểm tra source, runtime local, dashboard và mức độ sẵn sàng bảo vệ được
+ghi tại [báo cáo đánh giá đề tài 515](docs/bao-cao-danh-gia-de-tai-515.md).
+
 ## Production
 
-- Dat `SPRING_PROFILES_ACTIVE=prod`. Backend se dung fail-fast neu cookie, JWT, CORS, datasource, database/Redis credential hoac trusted-proxy CIDR khong an toan; `.env.example` chi danh cho local development.
+- Dat `SPRING_PROFILES_ACTIVE=prod`; khong ket hop `prod`/`production` voi profile fixture `dev` hoac `e2e`. Backend se dung fail-fast neu cookie, JWT, CORS, datasource, database/Redis credential, SMTP hoac trusted-proxy CIDR khong an toan; `.env.example` chi danh cho local development.
+- Cau hinh SMTP production bang `SPRING_MAIL_HOST`, `APP_MAIL_USERNAME`, `APP_MAIL_PASSWORD` va `APP_MAIL_FROM`; cac luong dang ky, doi email va dat lai mat khau deu phu thuoc OTP.
 - Dat `APP_AUTH_COOKIE_SECURE=true` va ket thuc TLS tai load balancer/reverse proxy phia truoc Nginx.
 - Chi cho phep Security Group cua ALB/reverse proxy truy cap port HTTP cua EC2/Docker host; khong mo port nay truc tiep cho Internet. Listener HTTP cong khai phai redirect sang HTTPS va certificate/TLS duoc quan ly tai ALB hoac edge proxy.
 - Mac dinh Nginx **khong** tin `X-Forwarded-*` tu client. Chi dat `NGINX_TRUSTED_PROXY_CIDR` thanh **mot CIDR** private cua TLS terminator ngay truoc Nginx (ALB/reverse proxy); khong dung `0.0.0.0/0`, CIDR cua client hay danh sach phan cach bang dau phay. Backend co `server.forward-headers-strategy=none`, vi vay app container cung khong tu dien giai header forwarded do caller gui truc tiep.
@@ -120,6 +124,7 @@ hạn bằng CIDR; không thay thế production có TLS.
 - Voi RDS/database nam ngoai Docker network, dat `SPRING_DATASOURCE_URL` co `sslMode=VERIFY_IDENTITY`; khong dung `useSSL=false`. URL MySQL `db` mac dinh chi dung cho private Compose network.
 - `FLARE_INTERNAL_SUBNET` phai la subnet Docker rieng cho moi Compose project. Mac dinh `APP_TRUSTED_PROXY_CIDRS` tu dong bao gom subnet nay; neu override bien nay, phai giu subnet do trong danh sach de backend chi tin forwarding do Nginx chuyen tiep.
 - Khong expose service `app` truc tiep: Compose chi publish Nginx, app chay non-root, read-only va khong co Linux capability. Chay `sh scripts/verify-compose-hardening.sh` trong CI/deploy review de kiem tra tat ca Compose variant khong mount `docker-entrypoint-initdb.d`/`db-init` va tat ca image da pin digest.
+- Them repository secret `NVD_API_KEY` lay tu NVD truoc khi chay GitHub Actions. Job Maven dependency audit fail-fast neu thieu key tren trusted run, bo qua an toan tren fork hoac workflow do Dependabot kich hoat (ke ca `push`), cache co so du lieu CVE theo ngay va co timeout 45 phut thay vi treo runner nhieu gio.
 - Kiem tra AWS ngoai repository: Security Group/IAM least privilege, ACM/TLS certificate, RDS encryption-at-rest/in-transit, backup ma hoa bang KMS va restore drill. Cac cau hinh nay khong the duoc xac nhan chi bang Docker source.
 - Flyway là nguồn schema duy nhất. Database hiện có phải được backup và thử restore
   trước khi nâng cấp; môi trường mới không cần hay không được import `schema_full.sql`.

@@ -1,5 +1,5 @@
 import { API_BASE, STORAGE_KEYS, UNSAFE_HTTP_METHODS } from '../core/config.js';
-import { getCsrfToken } from '../core/csrf.js';
+import { getCsrfToken, resetCsrfToken } from '../core/csrf.js';
 import { escapeHtml, isSafeImageSource, safeClassToken } from '../core/dom-safety.js';
 import {
     getImmutableUserId,
@@ -29,6 +29,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const ORDER_DATA_RESET_VERSION = '2026-05-18-soft-reset-orders-v2';
     const ANALYTICS_SESSION_KEY = 'pbl3_analytics_session';
     const LOCAL_ANALYTICS_EVENTS_KEY = 'pbl3_local_behavior_events';
+    const REVIEW_STATUS_VISIBLE = 'Hiển thị';
+    const AUTH_EPOCH_KEY = 'pbl3_auth_epoch';
+    const AUTH_COOKIE_MUTATION_LOCK = 'pbl3-auth-cookie-mutation';
     const HOME_SHOWCASE_STORAGE_KEY = 'pbl3_home_showcase_visible';
     const RECOMMENDATION_CACHE_KEY = 'pbl3_recommendation_cache_v1';
     const RECOMMENDATION_CACHE_TTL_MS = 2 * 60 * 60 * 1000;
@@ -587,6 +590,8 @@ document.addEventListener('DOMContentLoaded', () => {
     let profileOriginalEmail = '';
     let analyticsSessionId = ensureAnalyticsSessionId();
     let currentUser = null;
+    let sessionRestoreComplete = false;
+    let sessionRestorePromise = null;
     let promoHuntSyncPromise = null;
     let voucherAssignmentsSyncPromise = null;
     let promoHuntBackendAvailable = true;
@@ -602,6 +607,13 @@ document.addEventListener('DOMContentLoaded', () => {
     let managedReviewIndexReady = false;
     let allProducts = [];
     let productsLoaded = false;
+    let productLoadError = '';
+    let authStateGeneration = 0;
+    let acknowledgedAuthEpoch = String(readStoredValue(AUTH_EPOCH_KEY, '') || '');
+    let catalogLoadGeneration = 0;
+    let publicCatalogRecoveryPromise = null;
+    let publicCatalogRecoveryGeneration = 0;
+    let sessionVerificationPromise = null;
     let productById = new Map();
     let productSearchIndex = new WeakMap();
     let searchSuggestionTimer = 0;
@@ -680,7 +692,7 @@ document.addEventListener('DOMContentLoaded', () => {
         updateWishlistCount();
         await Promise.allSettled([
             loadAdministrativeUnits(),
-            restoreSession(),
+            ensureSessionRestored(),
             ensureCsrfToken()
         ]);
         await Promise.allSettled([
@@ -953,6 +965,11 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         window.addEventListener('storage', event => {
+            if (event.key === AUTH_EPOCH_KEY) {
+                acknowledgedAuthEpoch = String(event.newValue || '');
+                void refreshSessionAfterExternalAuthChange();
+                return;
+            }
             if (event.key === PROMO_BANNER_STORAGE_KEY) {
                 promoBannerRenderSignature = '';
                 renderPromoBannerCarousel();
@@ -1334,34 +1351,79 @@ document.addEventListener('DOMContentLoaded', () => {
 
         logoutLink.addEventListener('click', async event => {
             event.preventDefault();
-            try {
-                if (hasAuthenticatedSession()) {
-                    await apiRequest('/auth/logout', { method: 'POST' });
-                }
-            } catch (error) {
-                console.warn(error);
-            } finally {
-                clearSession();
-                updateAuthUI();
-                renderCatalog();
+            if (!hasAuthenticatedSession()) {
+                return;
             }
+            const logoutAuthContext = captureAuthContext();
+
+            await withAuthCookieMutationLock(async () => {
+                resetCsrfToken();
+                try {
+                    // The lock can be queued behind a login in another tab.
+                    // Never let an old logout intent revoke the cookie that
+                    // the newer account just established.
+                    assertAuthContextCurrent(logoutAuthContext);
+                    await apiRequest('/auth/logout', { method: 'POST' });
+                } catch (error) {
+                    console.warn(error);
+                    resetCsrfToken();
+                    const definitiveHttpRejection = Boolean(error?.responseReceived)
+                        && Number.isInteger(error?.httpStatus)
+                        && !isStaleAuthContextError(error);
+                    if (definitiveHttpRejection) {
+                        if (hasAuthenticatedSession()) {
+                            showCenteredMessage(error?.message || 'Không thể đăng xuất. Vui lòng thử lại.', 'error');
+                        }
+                        return;
+                    }
+
+                    // A transport failure is ambiguous: the server may already
+                    // have revoked the cookie. A stale response may instead mean
+                    // another tab established a newer account. Reconcile before
+                    // deciding whether any private state may remain visible.
+                    const contextChanged = !isAuthContextCurrent(logoutAuthContext);
+                    clearSession({ force: true, reloadCatalog: false });
+                    const reconciled = await reconcileSessionWithServer();
+                    if (!reconciled) {
+                        void reloadPublicCatalogAfterSessionClear();
+                        return;
+                    }
+                    if (!contextChanged && hasAuthenticatedSession()) {
+                        showCenteredMessage('Không thể xác nhận đăng xuất. Phiên hiện tại vẫn được giữ lại.', 'error');
+                    }
+                    return;
+                }
+
+                // Publish the guest epoch before releasing the cross-tab lock,
+                // so the next queued login cannot be mistaken for this logout.
+                clearSession();
+            });
         });
 
         loginForm.addEventListener('submit', async event => {
             event.preventDefault();
             loginError.classList.add('hidden');
+            const loginPayload = {
+                username: document.getElementById('username').value.trim(),
+                password: document.getElementById('password').value
+            };
 
             try {
-                const response = await apiRequest('/auth/login', {
-                    method: 'POST',
-                    auth: false,
-                    body: {
-                        username: document.getElementById('username').value.trim(),
-                        password: document.getElementById('password').value
-                    }
+                await withAuthCookieMutationLock(async () => {
+                    // A preceding logout response can rotate/delete Spring's
+                    // CSRF cookie even when it no longer deletes auth state.
+                    resetCsrfToken();
+                    const loginResponse = await apiRequest('/auth/login', {
+                        method: 'POST',
+                        auth: false,
+                        body: loginPayload
+                    });
+                    // Updating the in-memory authority and broadcasting its
+                    // epoch are part of the same cookie mutation transaction.
+                    applyLoginSession(loginResponse);
+                    return loginResponse;
                 });
 
-                applyLoginSession(response);
                 closeOverlay(loginOverlay);
                 loginForm.reset();
                 await syncCurrentUserStateFromApi();
@@ -1453,17 +1515,23 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
+            const registrationPayload = {
+                ...pendingRegisterPayload,
+                otp_code: registerOtpCode
+            };
+
             try {
-                const response = await apiRequest('/auth/register', {
-                    method: 'POST',
-                    auth: false,
-                    body: {
-                        ...pendingRegisterPayload,
-                        otp_code: registerOtpCode
-                    }
+                await withAuthCookieMutationLock(async () => {
+                    resetCsrfToken();
+                    const registrationResponse = await apiRequest('/auth/register', {
+                        method: 'POST',
+                        auth: false,
+                        body: registrationPayload
+                    });
+                    applyLoginSession(registrationResponse);
+                    return registrationResponse;
                 });
 
-                applyLoginSession(response);
                 closeOverlay(registerOtpOverlay);
                 registerForm.reset();
                 registerOtpForm.reset();
@@ -1733,6 +1801,13 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         productContainer.addEventListener('click', event => {
+            const retryButton = event.target.closest('[data-retry-products]');
+            if (retryButton) {
+                event.preventDefault();
+                void loadProducts();
+                return;
+            }
+
             const favoriteButton = event.target.closest('[data-favorite-toggle]');
             if (favoriteButton) {
                 event.preventDefault();
@@ -1944,8 +2019,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function restoreSession() {
+        const restoreAuthContext = captureAuthContext();
         try {
-            currentUser = normalizeUserProfile(await apiRequest('/auth/me'));
+            replaceAuthenticatedUser(await apiRequest('/auth/me'), { broadcast: false });
             invalidateRecommendationCache();
             updateCartCount();
             updateWishlistCount();
@@ -1957,8 +2033,24 @@ document.addEventListener('DOMContentLoaded', () => {
                 void loadHomeRecommendations(true);
             }
         } catch (error) {
-            clearSession();
+            if (isStaleAuthContextError(error) || !isAuthContextCurrent(restoreAuthContext)) {
+                return;
+            }
+            // apiRequest already clears an expired cookie-backed session on
+            // 401. A network failure during anonymous bootstrap has no
+            // authenticated profile, but stale private tab caches must still
+            // be purged before another account can sign in.
+            clearSession({ broadcast: false, force: true });
+        } finally {
+            sessionRestoreComplete = true;
         }
+    }
+
+    function ensureSessionRestored() {
+        if (!sessionRestorePromise) {
+            sessionRestorePromise = restoreSession();
+        }
+        return sessionRestorePromise;
     }
 
     async function fetchBoundedPageContent(path, options = {}) {
@@ -1985,10 +2077,10 @@ document.addEventListener('DOMContentLoaded', () => {
         return content;
     }
 
-    async function fetchProductsFromApi() {
+    async function fetchProductsFromApi(manageProducts = canManageProducts()) {
         return fetchBoundedPageContent(
-            canManageProducts() ? '/admin/products/page' : '/products/query',
-            { auth: canManageProducts() }
+            manageProducts ? '/admin/products/page' : '/products/query',
+            { auth: manageProducts }
         );
     }
 
@@ -2281,7 +2373,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
     function applyLoginSession(response) {
-        currentUser = normalizeUserProfile(response?.user || null);
+        resetCsrfToken();
+        replaceAuthenticatedUser(response?.user || null);
         invalidateRecommendationCache();
         updateCartCount();
         updateWishlistCount();
@@ -4473,41 +4566,127 @@ document.addEventListener('DOMContentLoaded', () => {
         return Number.isFinite(value) && value >= start && value <= end;
     }
 
+    function captureAuthContext() {
+        return {
+            generation: authStateGeneration,
+            accountId: getCurrentAccountStorageSuffix(),
+            workspaceAccess: canAccessWorkspace(),
+            authEpoch: acknowledgedAuthEpoch
+        };
+    }
+
+    function isAuthContextCurrent(context) {
+        return Boolean(context)
+            && context.generation === authStateGeneration
+            && context.accountId === getCurrentAccountStorageSuffix()
+            && context.workspaceAccess === canAccessWorkspace()
+            && context.authEpoch === acknowledgedAuthEpoch
+            && acknowledgedAuthEpoch === String(readStoredValue(AUTH_EPOCH_KEY, '') || '');
+    }
+
+    function publishAuthEpoch() {
+        acknowledgedAuthEpoch = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+        writeStoredValue(AUTH_EPOCH_KEY, acknowledgedAuthEpoch);
+    }
+
+    async function withAuthCookieMutationLock(operation) {
+        const lockManager = window.navigator?.locks;
+        if (!lockManager || typeof lockManager.request !== 'function') {
+            return operation();
+        }
+
+        return lockManager.request(
+            AUTH_COOKIE_MUTATION_LOCK,
+            { mode: 'exclusive' },
+            operation
+        );
+    }
+
+    function createStaleAuthContextError() {
+        const error = new Error('Phiên đăng nhập đã thay đổi. Vui lòng thử lại.');
+        error.code = 'STALE_AUTH_CONTEXT';
+        return error;
+    }
+
+    function assertAuthContextCurrent(context) {
+        if (!isAuthContextCurrent(context)) {
+            throw createStaleAuthContextError();
+        }
+    }
+
+    function isStaleAuthContextError(error) {
+        return error?.code === 'STALE_AUTH_CONTEXT';
+    }
+
     async function apiRequest(path, options = {}) {
         const {
             method = 'GET',
-            body
+            body,
+            auth = true
         } = options;
+        const requestAuthContext = auth ? captureAuthContext() : null;
 
         const headers = {
             'Content-Type': 'application/json'
         };
 
         if (UNSAFE_HTTP_METHODS.has(method.toUpperCase())) {
-            headers['X-XSRF-TOKEN'] = await ensureCsrfToken();
+            try {
+                headers['X-XSRF-TOKEN'] = await ensureCsrfToken();
+            } catch (error) {
+                if (auth && !isAuthContextCurrent(requestAuthContext)) {
+                    throw createStaleAuthContextError();
+                }
+                throw error;
+            }
+            if (auth) {
+                assertAuthContextCurrent(requestAuthContext);
+            }
         }
 
-        const response = await fetch(`${API_BASE}${path}`, {
-            method,
-            headers,
-            body: body ? JSON.stringify(body) : undefined,
-            credentials: 'same-origin'
-        });
+        let response;
+        try {
+            response = await fetch(`${API_BASE}${path}`, {
+                method,
+                headers,
+                body: body ? JSON.stringify(body) : undefined,
+                credentials: 'same-origin'
+            });
+        } catch (error) {
+            if (auth && !isAuthContextCurrent(requestAuthContext)) {
+                throw createStaleAuthContextError();
+            }
+            throw error;
+        }
+
+        // Never deliver a response that belongs to a previous authenticated
+        // browser session to callers running under a newer account.
+        if (auth && !isAuthContextCurrent(requestAuthContext)) {
+            throw createStaleAuthContextError();
+        }
 
         if (response.status === 204) {
             return null;
         }
 
         const text = await response.text();
+        if (auth && !isAuthContextCurrent(requestAuthContext)) {
+            throw createStaleAuthContextError();
+        }
         const data = text ? normalizePayload(safeJsonParse(text)) : null;
 
         if (!response.ok) {
             const message = buildApiErrorMessage(path, response, text, data);
-            if (response.status === 401) {
+            // Public endpoints can legitimately fail with 401 when a proxy is
+            // misconfigured. They must not recursively clear an already
+            // anonymous session and restart the public catalog forever.
+            if (response.status === 401 && auth && hasAuthenticatedSession()) {
                 clearSession();
-                updateAuthUI();
             }
-            throw new Error(message);
+            const error = new Error(message);
+            error.httpStatus = response.status;
+            error.responseReceived = true;
+            throw error;
         }
 
         return data;
@@ -4526,6 +4705,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (auth && !hasAuthenticatedSession()) {
             return;
         }
+        const scheduledAuthContext = auth ? captureAuthContext() : null;
 
         const timerKey = `${scope}:${key}`;
         const writeVersion = (syncWriteVersions.get(timerKey) || 0) + 1;
@@ -4535,8 +4715,18 @@ document.addEventListener('DOMContentLoaded', () => {
             window.clearTimeout(syncWriteTimers.get(timerKey));
         }
 
-        syncWriteTimers.set(timerKey, window.setTimeout(async () => {
+        const timerId = window.setTimeout(async () => {
+            if (syncWriteTimers.get(timerKey) !== timerId) {
+                return;
+            }
             syncWriteTimers.delete(timerKey);
+            if (auth && !isAuthContextCurrent(scheduledAuthContext)) {
+                if (syncWriteVersions.get(timerKey) === writeVersion) {
+                    syncWritePendingKeys.delete(timerKey);
+                    syncWriteVersions.delete(timerKey);
+                }
+                return;
+            }
             try {
                 await apiRequest(`/sync/${scope}/${key}`, {
                     method: 'PUT',
@@ -4556,7 +4746,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     syncWriteVersions.delete(timerKey);
                 }
             }
-        }, options.delay ?? 350));
+        }, options.delay ?? 350);
+        syncWriteTimers.set(timerKey, timerId);
     }
 
     function pushCurrentUserSyncState(key, value, options = {}) {
@@ -4570,12 +4761,16 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!currentUser || canAccessWorkspace() || !storageKey) {
             return false;
         }
+        const requestAuthContext = captureAuthContext();
         if (syncWritePendingKeys.has(`me:${syncKey}`) || syncWriteTimers.has(`me:${syncKey}`)) {
             return false;
         }
 
         try {
             const response = await apiRequest(`/sync/me/${syncKey}`);
+            if (!isAuthContextCurrent(requestAuthContext)) {
+                return false;
+            }
             const remoteValue = parseSyncPayload(response, null);
             if (Array.isArray(remoteValue)) {
                 if (remoteValue.length) {
@@ -4592,7 +4787,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 scheduleSyncStatePush('me', syncKey, Array.isArray(localValue) ? localValue : fallback, { delay: 0 });
             }
         } catch (error) {
-            console.warn(`Pull ${syncKey} failed`, error);
+            if (!isStaleAuthContextError(error)) {
+                console.warn(`Pull ${syncKey} failed`, error);
+            }
         }
         return false;
     }
@@ -4614,6 +4811,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!currentUser || canAccessWorkspace()) {
             return false;
         }
+        const requestAuthContext = captureAuthContext();
         const accountKey = getVoucherAssignmentAccountKey();
         if (!accountKey) {
             return false;
@@ -4622,22 +4820,32 @@ document.addEventListener('DOMContentLoaded', () => {
             return voucherAssignmentsSyncPromise;
         }
 
-        voucherAssignmentsSyncPromise = apiRequest('/sync/me/voucher-assignments')
-            .then(response => applyVoucherAssignmentSyncResponse(accountKey, response))
+        const syncPromise = apiRequest('/sync/me/voucher-assignments')
+            .then(response => (
+                isAuthContextCurrent(requestAuthContext)
+                    ? applyVoucherAssignmentSyncResponse(accountKey, response)
+                    : false
+            ))
             .catch(error => {
-                console.warn('Pull voucher assignments failed', error);
+                if (!isStaleAuthContextError(error)) {
+                    console.warn('Pull voucher assignments failed', error);
+                }
                 return false;
             })
             .finally(() => {
-                voucherAssignmentsSyncPromise = null;
+                if (voucherAssignmentsSyncPromise === syncPromise) {
+                    voucherAssignmentsSyncPromise = null;
+                }
             });
-        return voucherAssignmentsSyncPromise;
+        voucherAssignmentsSyncPromise = syncPromise;
+        return syncPromise;
     }
 
     async function syncCurrentUserStateFromApi(options = {}) {
         if (!currentUser || canAccessWorkspace()) {
             return;
         }
+        const requestAuthContext = captureAuthContext();
 
         const changed = await Promise.all([
             syncScopedArrayFromApi('cart', getCurrentCartStorageKey(), []),
@@ -4646,6 +4854,10 @@ document.addEventListener('DOMContentLoaded', () => {
             syncScopedArrayFromApi('search-history', getSearchHistoryStorageKey(), []),
             syncCurrentVoucherAssignmentsFromApi()
         ]);
+
+        if (!isAuthContextCurrent(requestAuthContext)) {
+            return;
+        }
 
         updateCartCount();
         updateWishlistCount();
@@ -4686,14 +4898,6 @@ document.addEventListener('DOMContentLoaded', () => {
                             return true;
                         }
                     }
-                    return false;
-                }
-            },
-            {
-                key: 'managed-reviews',
-                apply(value) {
-                    // Reviews now sync through /api/reviews. Keep this key readable for older data,
-                    // but do not let stale app-state overwrite backend review state.
                     return false;
                 }
             },
@@ -5958,6 +6162,21 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    function renderProductLoadError() {
+        productRenderToken += 1;
+        if (pendingProductContainerClearTimer) {
+            window.clearTimeout(pendingProductContainerClearTimer);
+            pendingProductContainerClearTimer = null;
+        }
+        productContainer.innerHTML = `
+            <div class="catalog-load-error" role="alert">
+                <p class="error-text">${escapeHtml(productLoadError)}</p>
+                <button class="secondary-btn" type="button" data-retry-products>Thử tải lại</button>
+            </div>
+        `;
+        productContainer.classList.remove('hidden');
+    }
+
     
 /* Removed duplicate renderWishlistView; the later implementation is authoritative. */
 
@@ -5980,7 +6199,12 @@ document.addEventListener('DOMContentLoaded', () => {
         const baseProducts = shouldShowHomeLanding ? [] : getBaseProducts();
         const filteredProducts = shouldShowHomeLanding ? [] : getFilteredProducts(baseProducts);
         const isMegaMenuOpen = megaMenu && !megaMenu.classList.contains('hidden');
-        if (shouldShowHomeLanding) {
+        if (productLoadError) {
+            renderProductLoadError();
+            collectionView.classList.add('hidden');
+            activeFilters.classList.add('hidden');
+            personalizedHomeView?.classList.add('hidden');
+        } else if (shouldShowHomeLanding) {
             scheduleProductContainerClear();
             collectionView.classList.add('hidden');
             activeFilters.classList.add('hidden');
@@ -5999,7 +6223,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         const catalogContext = buildCatalogTrackingContext();
         setTrackedPageContext(catalogContext.pageType, catalogContext.pageKey, catalogContext.extra);
-        if (shouldShowHomeLanding) {
+        if (shouldShowHomeLanding && !productLoadError) {
             void loadHomeRecommendations();
         }
         syncMainView();
@@ -6809,6 +7033,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function openAddressForm(addressId = '') {
+        if (!hasAuthenticatedSession() || canAccessWorkspace()) {
+            return;
+        }
+        const requestAuthContext = captureAuthContext();
         const addresses = getAddressBook();
         const editingAddress = addresses.find(address => address.id === addressId);
 
@@ -6822,6 +7050,9 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('address-default').checked = editingAddress?.isDefault || (!editingAddress && !addresses.length);
         addressFormTitle.textContent = editingAddress ? 'Cập nhật địa chỉ' : 'Thêm địa chỉ mới';
         await syncAddressAdministrativeSelects(editingAddress || null);
+        if (!isAuthContextCurrent(requestAuthContext)) {
+            return;
+        }
         if (addressHouseNumberInput) {
             addressHouseNumberInput.value = editingAddress?.houseNumber
                 || String(editingAddress?.line || '').trim()
@@ -7732,6 +7963,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!shouldSyncOrdersWithApi()) {
             return [];
         }
+        const requestAuthContext = captureAuthContext();
         if (orderApiSyncPromise) {
             return orderApiSyncPromise;
         }
@@ -7739,37 +7971,53 @@ document.addEventListener('DOMContentLoaded', () => {
             return [];
         }
 
-        orderApiSyncPromise = fetchOrderPagesFromApi()
+        const syncPromise = fetchOrderPagesFromApi(requestAuthContext)
             .then(orders => {
+                if (!isAuthContextCurrent(requestAuthContext)) {
+                    return [];
+                }
                 orderApiBackendAvailable = true;
                 orderApiSyncedAt = Date.now();
                 const remoteOrders = mergeRemoteOrdersIntoLocal(orders);
                 return remoteOrders;
             })
             .catch(error => {
-                orderApiBackendAvailable = false;
-                console.warn('Order API sync failed:', error);
+                if (isAuthContextCurrent(requestAuthContext)) {
+                    orderApiBackendAvailable = false;
+                    if (!isStaleAuthContextError(error)) {
+                        console.warn('Order API sync failed:', error);
+                    }
+                }
                 return [];
             })
             .finally(() => {
-                orderApiSyncPromise = null;
+                if (orderApiSyncPromise === syncPromise) {
+                    orderApiSyncPromise = null;
+                }
             });
 
-        return orderApiSyncPromise;
+        orderApiSyncPromise = syncPromise;
+        return syncPromise;
     }
 
-    async function fetchOrderPagesFromApi() {
-        const basePath = canAccessWorkspace() ? '/orders/page' : '/orders/me/page';
+    async function fetchOrderPagesFromApi(requestAuthContext = captureAuthContext()) {
+        const basePath = requestAuthContext.workspaceAccess ? '/orders/page' : '/orders/me/page';
         const orders = [];
         let before = '';
         let beforeId = '';
         for (let pageIndex = 0; pageIndex < 20; pageIndex += 1) {
+            if (!isAuthContextCurrent(requestAuthContext)) {
+                return [];
+            }
             const params = new URLSearchParams({ limit: '100' });
             if (before) {
                 params.set('before', before);
                 params.set('beforeId', beforeId);
             }
             const page = await apiRequest(`${basePath}?${params.toString()}`);
+            if (!isAuthContextCurrent(requestAuthContext)) {
+                return [];
+            }
             orders.push(...(Array.isArray(page?.content) ? page.content : []));
             if (!page?.has_more || !page?.next_before) {
                 break;
@@ -7805,17 +8053,23 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!shouldSyncOrdersWithApi() || canAccessWorkspace()) {
             return null;
         }
+        const requestAuthContext = captureAuthContext();
 
         try {
             const remoteOrder = await apiRequest('/orders', {
                 method: 'POST',
                 body: order
             });
+            assertAuthContextCurrent(requestAuthContext);
             mergeRemoteOrdersIntoLocal([remoteOrder]);
             return remoteOrder;
         } catch (error) {
-            orderApiBackendAvailable = false;
-            console.warn('Create order API failed:', error);
+            if (isAuthContextCurrent(requestAuthContext)) {
+                orderApiBackendAvailable = false;
+                if (!isStaleAuthContextError(error)) {
+                    console.warn('Create order API failed:', error);
+                }
+            }
             return null;
         }
     }
@@ -7824,6 +8078,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!shouldSyncOrdersWithApi() || !canAccessWorkspace()) {
             return null;
         }
+        const requestAuthContext = captureAuthContext();
 
         const body = { ...patch };
         if (Object.prototype.hasOwnProperty.call(body, 'status')) {
@@ -7841,11 +8096,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 method: 'PATCH',
                 body
             });
+            assertAuthContextCurrent(requestAuthContext);
             mergeRemoteOrdersIntoLocal([remoteOrder]);
             return remoteOrder;
         } catch (error) {
-            orderApiBackendAvailable = false;
-            console.warn('Update order API failed:', error);
+            if (isAuthContextCurrent(requestAuthContext)) {
+                orderApiBackendAvailable = false;
+                if (!isStaleAuthContextError(error)) {
+                    console.warn('Update order API failed:', error);
+                }
+            }
             return null;
         }
     }
@@ -7854,6 +8114,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!shouldSyncOrdersWithApi() || canAccessWorkspace()) {
             return null;
         }
+        const requestAuthContext = captureAuthContext();
 
         const normalizedOrderId = String(orderId || '').trim();
         const endpoint = action === 'return' ? 'return-request' : 'cancel-request';
@@ -7868,10 +8129,13 @@ document.addEventListener('DOMContentLoaded', () => {
                     supportNote: String(note || '').trim()
                 }
             });
+            assertAuthContextCurrent(requestAuthContext);
             mergeRemoteOrdersIntoLocal([remoteOrder]);
             return normalizeWorkspaceOrder(remoteOrder);
         } catch (error) {
-            orderApiBackendAvailable = false;
+            if (isAuthContextCurrent(requestAuthContext)) {
+                orderApiBackendAvailable = false;
+            }
             throw error;
         }
     }
@@ -8022,12 +8286,19 @@ document.addEventListener('DOMContentLoaded', () => {
             return [];
         }
 
+        const requestAuthGeneration = authStateGeneration;
         try {
             const users = await fetchBoundedPageContent('/admin/users/page');
+            if (requestAuthGeneration !== authStateGeneration || !isManagerWorkspaceUser()) {
+                return [];
+            }
             state.managerBaseUsers = users.map(user => normalizeAccountRecord(user));
             state.managerAccountsFromApi = true;
             removeStorage('pbl3_account_registry');
         } catch (error) {
+            if (requestAuthGeneration !== authStateGeneration || !isManagerWorkspaceUser()) {
+                return [];
+            }
             state.managerBaseUsers = Array.isArray(state.managerBaseUsers) ? state.managerBaseUsers : [];
             state.managerAccountsFromApi = false;
         }
@@ -8753,12 +9024,16 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function syncPromoHuntCampaignsFromApi(options = {}) {
+        const requestAuthContext = captureAuthContext();
         if (promoHuntSyncPromise) {
             return promoHuntSyncPromise;
         }
 
-        promoHuntSyncPromise = apiRequest('/promo-hunt/campaigns', { auth: hasAuthenticatedSession() })
+        const syncPromise = apiRequest('/promo-hunt/campaigns', { auth: hasAuthenticatedSession() })
             .then(campaigns => {
+                if (!isAuthContextCurrent(requestAuthContext)) {
+                    return [];
+                }
                 promoHuntBackendAvailable = true;
                 const normalized = replacePromoHuntCampaignsFromServer(Array.isArray(campaigns) ? campaigns : []);
                 if (options.render && currentView === 'promo-hunt') {
@@ -8770,14 +9045,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 return normalized;
             })
             .catch(() => {
-                promoHuntBackendAvailable = false;
-                return getPromoHuntCampaigns();
+                if (isAuthContextCurrent(requestAuthContext)) {
+                    promoHuntBackendAvailable = false;
+                    return getPromoHuntCampaigns();
+                }
+                return [];
             })
             .finally(() => {
-                promoHuntSyncPromise = null;
+                if (promoHuntSyncPromise === syncPromise) {
+                    promoHuntSyncPromise = null;
+                }
             });
 
-        return promoHuntSyncPromise;
+        promoHuntSyncPromise = syncPromise;
+        return syncPromise;
     }
 
     function getPromoHuntCampaignClaims(campaignId) {
@@ -9274,30 +9555,46 @@ document.addEventListener('DOMContentLoaded', () => {
             });
     }
 
-    function buildSeedReviews() {
-        return allProducts.slice(0, Math.min(8, allProducts.length)).map((product, index) => ({
-            id: `seed-review-${product.id || index + 1}`,
-            productId: String(product.id || ''),
-            reviewer: `Khách ${index + 1}`,
-            rating: 5 - (index % 2),
-            content: `Đánh giá nhanh cho ${product.ten_san_pham || 'sản phẩm'}: chất lượng ổn, đóng gói gọn và phù hợp để demo quản lý đánh giá.`,
-            status: index % 3 === 0 ? 'Ẩn' : 'Hiển thị',
-            createdAt: new Date(Date.now() - index * 86400000).toISOString()
-        }));
-    }
-
-    function normalizeReviewRecord(review = {}) {
+    function normalizePublicReviewRecord(review = {}) {
         return {
             id: String(review.id || generateRecordId('review')),
             productId: String(review.productId || review.product_id || ''),
-            orderId: String(review.orderId || review.order_id || ''),
-            userId: String(review.userId || review.user_id || ''),
             reviewer: sanitizeProductText(review.reviewer || review.reviewerName || review.reviewer_name || 'Khách hàng'),
             rating: Math.min(5, Math.max(1, Number(review.rating || 5))),
             content: sanitizeProductText(review.content || ''),
-            status: sanitizeProductText(review.status || 'Hiển thị'),
+            status: REVIEW_STATUS_VISIBLE,
             createdAt: review.createdAt || review.created_at || new Date().toISOString()
         };
+    }
+
+    function normalizeInternalReviewRecord(review = {}) {
+        return {
+            ...normalizePublicReviewRecord(review),
+            orderId: String(review.orderId || review.order_id || ''),
+            userId: String(review.userId || review.user_id || ''),
+            status: sanitizeProductText(review.status || REVIEW_STATUS_VISIBLE)
+        };
+    }
+
+    function normalizeCachedReviewRecord(review = {}) {
+        const publicReview = normalizePublicReviewRecord(review);
+        if (!hasAuthenticatedSession()) {
+            return publicReview;
+        }
+        if (isStaffWorkspaceUser() || isManagerWorkspaceUser()) {
+            return normalizeInternalReviewRecord(review);
+        }
+
+        const currentUserId = String(currentUser?.id || '');
+        const reviewUserId = String(review.userId || review.user_id || '');
+        if (reviewUserId && reviewUserId === currentUserId) {
+            return {
+                ...publicReview,
+                orderId: String(review.orderId || review.order_id || ''),
+                userId: reviewUserId
+            };
+        }
+        return publicReview;
     }
 
     function buildManagedReviewIndexKey(orderId, productId, userId) {
@@ -9332,15 +9629,20 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function setManagedReviewsLocal(reviews) {
-        const normalizedReviews = (Array.isArray(reviews) ? reviews : []).map(normalizeReviewRecord);
+        const normalizedReviews = (Array.isArray(reviews) ? reviews : []).map(normalizeCachedReviewRecord);
         writeStorage('pbl3_managed_reviews', normalizedReviews);
         rebuildManagedReviewIndex(normalizedReviews);
     }
 
     function getManagedReviews() {
         const stored = readStorage('pbl3_managed_reviews', null);
-        const reviews = Array.isArray(stored) ? stored.map(normalizeReviewRecord) : [];
+        if (!sessionRestoreComplete) {
+            return Array.isArray(stored) ? stored.map(normalizePublicReviewRecord) : [];
+        }
+        const reviews = Array.isArray(stored) ? stored.map(normalizeCachedReviewRecord) : [];
         if (!Array.isArray(stored)) {
+            setManagedReviewsLocal(reviews);
+        } else if (JSON.stringify(stored) !== JSON.stringify(reviews)) {
             setManagedReviewsLocal(reviews);
         } else if (!managedReviewIndexReady) {
             rebuildManagedReviewIndex(reviews);
@@ -9349,8 +9651,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function mergeManagedReviewsLocal(reviews) {
-        const reviewMap = new Map(getManagedReviews().map(review => [String(review.id), normalizeReviewRecord(review)]));
-        (Array.isArray(reviews) ? reviews : []).map(normalizeReviewRecord).forEach(review => {
+        const reviewMap = new Map(getManagedReviews().map(review => [String(review.id), normalizeCachedReviewRecord(review)]));
+        (Array.isArray(reviews) ? reviews : []).map(normalizeCachedReviewRecord).forEach(review => {
             if (review.id) {
                 reviewMap.set(String(review.id), review);
             }
@@ -9362,17 +9664,29 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function replaceManagedReviewsFromApi(reviews) {
-        const normalizedReviews = (Array.isArray(reviews) ? reviews : []).map(normalizeReviewRecord);
+        const normalizedReviews = (Array.isArray(reviews) ? reviews : []).map(normalizeInternalReviewRecord);
         setManagedReviewsLocal(normalizedReviews);
         return normalizedReviews;
     }
 
     function replaceProductReviewsLocal(productId, reviews) {
         const normalizedProductId = String(productId || '');
-        const remoteReviews = (Array.isArray(reviews) ? reviews : []).map(normalizeReviewRecord);
+        const cachedReviews = getManagedReviews();
+        const cachedById = new Map(cachedReviews.map(review => [String(review.id || ''), review]));
+        const remoteReviews = (Array.isArray(reviews) ? reviews : []).map(normalizePublicReviewRecord).map(review => {
+            const cachedReview = cachedById.get(String(review.id || ''));
+            if (!cachedReview?.orderId || !cachedReview?.userId) {
+                return review;
+            }
+            return normalizeCachedReviewRecord({
+                ...review,
+                orderId: cachedReview.orderId,
+                userId: cachedReview.userId
+            });
+        });
         const nextReviews = [
             ...remoteReviews,
-            ...getManagedReviews().filter(review => String(review.productId || '') !== normalizedProductId)
+            ...cachedReviews.filter(review => String(review.productId || '') !== normalizedProductId)
         ].sort((left, right) => new Date(right.createdAt || 0) - new Date(left.createdAt || 0));
         setManagedReviewsLocal(nextReviews);
         return nextReviews;
@@ -9382,6 +9696,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!canAccessWorkspace() || !hasAuthenticatedSession() || (!reviewApiBackendAvailable && !force)) {
             return [];
         }
+        const requestAuthContext = captureAuthContext();
         if (reviewApiSyncPromise) {
             return reviewApiSyncPromise;
         }
@@ -9389,37 +9704,57 @@ document.addEventListener('DOMContentLoaded', () => {
             return getManagedReviews();
         }
 
-        reviewApiSyncPromise = fetchBoundedPageContent('/reviews/page', { maxPages: 10 })
+        const syncPromise = fetchBoundedPageContent('/reviews/page', { maxPages: 10 })
             .then(reviews => {
+                if (!isAuthContextCurrent(requestAuthContext) || !requestAuthContext.workspaceAccess) {
+                    return [];
+                }
                 reviewApiBackendAvailable = true;
                 reviewApiSyncedAt = Date.now();
                 return replaceManagedReviewsFromApi(reviews);
             })
             .catch(error => {
-                reviewApiBackendAvailable = false;
-                console.warn('Khong the dong bo danh gia tu API:', error);
-                return getManagedReviews();
+                if (isAuthContextCurrent(requestAuthContext)) {
+                    reviewApiBackendAvailable = false;
+                    if (!isStaleAuthContextError(error)) {
+                        console.warn('Khong the dong bo danh gia tu API:', error);
+                    }
+                    return getManagedReviews();
+                }
+                return [];
             })
             .finally(() => {
-                reviewApiSyncPromise = null;
+                if (reviewApiSyncPromise === syncPromise) {
+                    reviewApiSyncPromise = null;
+                }
             });
 
-        return reviewApiSyncPromise;
+        reviewApiSyncPromise = syncPromise;
+        return syncPromise;
     }
 
     async function syncProductReviewsFromApi(productId) {
         if (!productId || !reviewApiBackendAvailable) {
             return [];
         }
+        await ensureSessionRestored();
+        const requestGeneration = authStateGeneration;
+        const normalizedProductId = String(productId);
 
         try {
             const reviews = await fetchBoundedPageContent(
-                `/reviews/products/${encodeURIComponent(productId)}/page`,
+                `/reviews/products/${encodeURIComponent(normalizedProductId)}/page`,
                 { auth: false, maxPages: 10 }
             );
+            if (requestGeneration !== authStateGeneration) {
+                return [];
+            }
             reviewApiBackendAvailable = true;
-            return replaceProductReviewsLocal(productId, reviews);
+            return replaceProductReviewsLocal(normalizedProductId, reviews);
         } catch (error) {
+            if (requestGeneration !== authStateGeneration) {
+                return [];
+            }
             reviewApiBackendAvailable = false;
             console.warn('Khong the tai danh gia san pham:', error);
             return getManagedReviews();
@@ -9430,25 +9765,31 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!hasAuthenticatedSession()) {
             throw new Error('Vui lòng đăng nhập để gửi đánh giá.');
         }
+        const requestAuthContext = captureAuthContext();
         const createdReview = await apiRequest('/reviews', {
             method: 'POST',
             body: payload
         });
+        assertAuthContextCurrent(requestAuthContext);
         reviewApiBackendAvailable = true;
-        return normalizeReviewRecord(createdReview);
+        return normalizeInternalReviewRecord(createdReview);
     }
 
     async function updateReviewStatusToApi(reviewId, status) {
+        const requestAuthContext = captureAuthContext();
         const updatedReview = await apiRequest(`/reviews/${encodeURIComponent(reviewId)}`, {
             method: 'PATCH',
             body: { status }
         });
+        assertAuthContextCurrent(requestAuthContext);
         reviewApiBackendAvailable = true;
-        return normalizeReviewRecord(updatedReview);
+        return normalizeInternalReviewRecord(updatedReview);
     }
 
     async function deleteReviewToApi(reviewId) {
+        const requestAuthContext = captureAuthContext();
         await apiRequest(`/reviews/${encodeURIComponent(reviewId)}`, { method: 'DELETE' });
+        assertAuthContextCurrent(requestAuthContext);
         reviewApiBackendAvailable = true;
         return true;
     }
@@ -9553,13 +9894,22 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!currentUser || canAccessWorkspace()) {
             return null;
         }
+        const requestAuthContext = captureAuthContext();
 
         try {
             const response = await apiRequest(`/support/me?createIfMissing=${createIfMissing ? 'true' : 'false'}`);
+            if (!isAuthContextCurrent(requestAuthContext) || requestAuthContext.workspaceAccess) {
+                return null;
+            }
             return response ? upsertSupportThread(response) : null;
         } catch (error) {
-            console.warn('Không thể tải cuộc trò chuyện hỗ trợ từ máy chủ.', error);
-            return getCustomerSupportThread(false);
+            if (isAuthContextCurrent(requestAuthContext)) {
+                if (!isStaleAuthContextError(error)) {
+                    console.warn('Không thể tải cuộc trò chuyện hỗ trợ từ máy chủ.', error);
+                }
+                return getCustomerSupportThread(false);
+            }
+            return null;
         }
     }
 
@@ -9567,26 +9917,32 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!canAccessWorkspace()) {
             return [];
         }
+        const requestAuthContext = captureAuthContext();
 
         try {
             const response = await apiRequest('/support/threads');
+            if (!isAuthContextCurrent(requestAuthContext) || !requestAuthContext.workspaceAccess) {
+                return [];
+            }
             return replaceSupportThreads(response);
         } catch (error) {
-            return getSupportThreads();
+            return isAuthContextCurrent(requestAuthContext) ? getSupportThreads() : [];
         }
     }
 
     async function sendCustomerSupportMessageToApi(text) {
         const content = String(text || '').trim();
-        if (!content) {
+        if (!content || !hasAuthenticatedSession() || canAccessWorkspace()) {
             return null;
         }
+        const requestAuthContext = captureAuthContext();
 
         try {
             const response = await apiRequest('/support/me/messages', {
                 method: 'POST',
                 body: { text: content }
             });
+            assertAuthContextCurrent(requestAuthContext);
             return response ? upsertSupportThread(response) : null;
         } catch (error) {
             throw error;
@@ -9595,15 +9951,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function sendWorkspaceSupportMessageToApi(threadId, text) {
         const content = String(text || '').trim();
-        if (!threadId || !content) {
+        if (!threadId || !content || !canAccessWorkspace()) {
             return null;
         }
+        const requestAuthContext = captureAuthContext();
 
         try {
             const response = await apiRequest(`/support/threads/${encodeURIComponent(threadId)}/messages`, {
                 method: 'POST',
                 body: { text: content }
             });
+            assertAuthContextCurrent(requestAuthContext);
             return response ? upsertSupportThread(response) : null;
         } catch (error) {
             throw error;
@@ -9612,15 +9970,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function updateSupportThreadStatusToApi(threadId, status) {
         const nextStatus = String(status || '').trim();
-        if (!threadId || !nextStatus) {
+        if (!threadId || !nextStatus || !canAccessWorkspace()) {
             return null;
         }
+        const requestAuthContext = captureAuthContext();
 
         try {
             const response = await apiRequest(`/support/threads/${encodeURIComponent(threadId)}/status`, {
                 method: 'PUT',
                 body: { status: nextStatus }
             });
+            assertAuthContextCurrent(requestAuthContext);
             return response ? upsertSupportThread(response) : null;
         } catch (error) {
             throw error;
@@ -9629,8 +9989,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function refreshSupportUiFromApi() {
         if (canAccessWorkspace() && currentView === 'workspace' && getWorkspaceState().activeWorkspaceTab === 'support-mgmt') {
+            const requestAuthContext = captureAuthContext();
             const deferRefresh = shouldDeferSupportPanelRefresh();
             await syncWorkspaceSupportThreadsFromApi();
+            if (!isAuthContextCurrent(requestAuthContext) || currentView !== 'workspace') {
+                return;
+            }
             if (deferRefresh) {
                 getWorkspaceState().pendingSupportPanelRefresh = true;
                 return;
@@ -9641,7 +10005,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const supportPanel = document.getElementById('support-chat-panel');
         if (currentUser && !canAccessWorkspace() && supportPanel && !supportPanel.classList.contains('hidden')) {
+            const requestAuthContext = captureAuthContext();
             await syncCustomerSupportThreadFromApi(false);
+            if (!isAuthContextCurrent(requestAuthContext)) {
+                return;
+            }
             renderCustomerSupportChat();
         }
     }
@@ -11372,6 +11740,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!canAccessWorkspace()) {
             return;
         }
+        const requestAuthContext = captureAuthContext();
 
         const state = getWorkspaceState();
         if (preferredTab) {
@@ -11380,11 +11749,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (isManagerWorkspaceUser()) {
             await ensureManagerAccountsLoaded();
+            if (!isAuthContextCurrent(requestAuthContext) || !canAccessWorkspace()) {
+                return;
+            }
             await loadAdminBehaviorOverview();
+            if (!isAuthContextCurrent(requestAuthContext) || !canAccessWorkspace()) {
+                return;
+            }
         }
 
         if (canAccessWorkspace()) {
             await syncWorkspaceSupportThreadsFromApi();
+        }
+        if (!isAuthContextCurrent(requestAuthContext) || !canAccessWorkspace()) {
+            return;
         }
 
         userDropdown.classList.add('hidden');
@@ -11408,19 +11786,387 @@ document.addEventListener('DOMContentLoaded', () => {
 /* Removed duplicate syncMainView; the later implementation is authoritative. */
 
 
-    function clearSession() {
-        saveAppliedVoucherCode('');
-        currentUser = null;
-        userDropdown.classList.add('hidden');
+    function purgeRoleScopedClientState() {
+        syncWriteTimers.forEach(timerId => window.clearTimeout(timerId));
+        syncWriteTimers.clear();
+        syncWritePendingKeys.clear();
+        syncWriteVersions.clear();
+        workspaceTextRenderTimers.forEach(timerId => window.clearTimeout(timerId));
+        workspaceTextRenderTimers.clear();
+
+        // Promise callbacks retain their own generation guards. Releasing the
+        // handles here lets the new session start a fresh sync immediately.
+        voucherAssignmentsSyncPromise = null;
+        orderApiSyncPromise = null;
+        orderApiSyncedAt = 0;
+        orderApiBackendAvailable = true;
+        reviewApiSyncPromise = null;
+        reviewApiSyncedAt = 0;
+        reviewApiBackendAvailable = true;
+        promoHuntSyncPromise = null;
+        sessionVerificationPromise = null;
+
+        // These caches contain customer identities, addresses, messages or
+        // privileged review metadata and must never survive an account switch.
+        clearLegacyDemoOrderCache();
+        removeStorage('pbl3_managed_reviews');
+        removeStorage('pbl3_support_threads');
+        removeStorage(VOUCHER_ASSIGNMENTS_KEY);
+        removeStorage(PROMO_HUNT_CLAIMS_KEY);
+        removeStorage(ANALYTICS_SESSION_KEY);
+        removeStorage(LOCAL_ANALYTICS_EVENTS_KEY);
+        removeStorage(RECOMMENDATION_CACHE_KEY);
+
+        // A failed anonymous bootstrap does not know the previous account id.
+        // Scan both browser stores so private remnants from a prior page load
+        // cannot later be re-associated with a different account.
+        const scopedPrefixes = [
+            `${CART_KEY}_`,
+            `${WISHLIST_KEY}_`,
+            `${ADDRESS_BOOK_KEY}_`,
+            `${ORDER_HISTORY_KEY}_`,
+            `${VOUCHER_KEY}_`,
+            'pbl3_search_history_'
+        ];
+        [window.localStorage, window.sessionStorage].forEach(storage => {
+            const removableKeys = [];
+            try {
+                for (let index = 0; index < storage.length; index += 1) {
+                    const key = storage.key(index);
+                    if (key && scopedPrefixes.some(prefix => key.startsWith(prefix))) {
+                        removableKeys.push(key);
+                    }
+                }
+            } catch (error) {
+                return;
+            }
+            removableKeys.forEach(key => removeStorage(key));
+        });
+        analyticsSessionId = ensureAnalyticsSessionId();
+        trackedPageContext = {
+            pageType: '',
+            pageKey: '',
+            extra: {},
+            startedAt: Date.now()
+        };
+        reviewedOrderProductByUser = new Map();
+        reviewedLegacyProductByUser = new Map();
+        managedReviewIndexReady = false;
+
+        allProducts = [];
+        productsLoaded = false;
+        productLoadError = '';
+        editingProduct = null;
+        rebuildProductSearchIndex(allProducts);
         invalidateRecommendationCache();
+
+        productRenderToken += 1;
+        if (pendingProductContainerClearTimer) {
+            window.clearTimeout(pendingProductContainerClearTimer);
+            pendingProductContainerClearTimer = null;
+        }
+        productContainer.innerHTML = '';
+        productListBody.innerHTML = '';
+        if (userListBody) {
+            userListBody.innerHTML = '';
+        }
+        if (homeSaleTrack) {
+            homeSaleTrack.innerHTML = '';
+        }
+        if (homeSaleDots) {
+            homeSaleDots.innerHTML = '';
+        }
+        if (personalizedHomeGrid) {
+            personalizedHomeGrid.innerHTML = '';
+        }
+        Object.values(megaPanels).filter(Boolean).forEach(panel => {
+            panel.innerHTML = '';
+        });
+
+        currentDetailProductId = '';
+        currentDetailSelectedSize = '';
+        currentDetailSelectedType = '';
+        currentDetailQuantity = 1;
+        currentDetailImageIndex = 0;
+        currentReviewOrderId = '';
+        currentCheckoutAddressId = '';
+        pendingWishlistMoveProductId = '';
+        [
+            productDetailBreadcrumb,
+            productDetailCategory,
+            productDetailTitle,
+            productDetailBrand,
+            productDetailRating,
+            productDetailStock,
+            productDetailPrice,
+            productDetailShortDescription,
+            productDetailDescription,
+            productDetailReviewCount,
+            productDetailError,
+            productDetailReviewError
+        ].filter(Boolean).forEach(element => {
+            element.textContent = '';
+        });
+        [
+            productDetailThumbnails,
+            productDetailTypeOptions,
+            productDetailSizeOptions,
+            productDetailReviews,
+            productDetailRelated
+        ].filter(Boolean).forEach(element => {
+            element.innerHTML = '';
+        });
+        if (productDetailMainImage) {
+            productDetailMainImage.removeAttribute('src');
+            productDetailMainImage.alt = '';
+        }
+        productDetailView?.classList.add('hidden');
+
+        closeOverlay(productOverlay);
+        closeOverlay(profileOverlay);
+        closeOverlay(passwordOverlay);
+        closeOverlay(cartItemOverlay);
+        closeOverlay(loginOverlay);
+        closeOverlay(registerOverlay);
+        closeOverlay(registerOtpOverlay);
+        closeOverlay(forgotPasswordOverlay);
+        closeOverlay(resetPasswordOverlay);
+        productForm?.reset();
+        profileForm?.reset();
+        passwordForm?.reset();
+        cartItemForm?.reset();
+        forgotPasswordForm?.reset();
+        resetPasswordForm?.reset();
+        closeAddressForm();
+        resetPendingRegisterState();
+        profileOriginalEmail = '';
+        pendingPasswordResetEmail = '';
+        pendingPasswordResetToken = '';
+        [profileError, passError, cartItemError, forgotPasswordError, resetPasswordError].filter(Boolean).forEach(errorBox => {
+            errorBox.textContent = '';
+            errorBox.classList.add('hidden');
+        });
+        if (productError) {
+            productError.textContent = '';
+            productError.classList.add('hidden');
+        }
+        closeAccountForm();
+        closeAccountDeleteDialog();
+
+        [
+            cartItemsContainer,
+            cartRecommendationsGrid,
+            wishlistGrid,
+            addressList,
+            ordersList,
+            checkoutItems,
+            voucherList,
+            checkoutVoucherList,
+            document.getElementById('checkout-address-list'),
+            document.getElementById('support-chat-messages'),
+            document.getElementById('staff-orders-panel'),
+            document.getElementById('customers-mgmt-panel'),
+            document.getElementById('returns-mgmt-panel'),
+            document.getElementById('reviews-mgmt-panel'),
+            document.getElementById('stats-mgmt-panel'),
+            document.getElementById('bestseller-mgmt-panel'),
+            document.getElementById('support-mgmt-panel'),
+            document.getElementById('vouchers-mgmt-panel')
+        ].filter(Boolean).forEach(element => {
+            element.innerHTML = '';
+        });
+        document.querySelectorAll('.workspace-dynamic-panel').forEach(panel => {
+            panel.innerHTML = '';
+        });
+        if (productDetailReviewContent) {
+            productDetailReviewContent.value = '';
+        }
+        cartRecommendationsSection?.classList.add('hidden');
+        [voucherAppliedNote, checkoutVoucherAppliedNote].filter(Boolean).forEach(note => {
+            note.textContent = '';
+            note.classList.add('hidden');
+        });
+        [
+            cartSelectionSummary,
+            cartSummaryCount,
+            cartSummarySubtotal,
+            cartSummaryShipping,
+            cartSummaryDiscount,
+            cartSummaryTotal,
+            checkoutSummaryCount,
+            checkoutSummarySubtotal,
+            checkoutSummaryShipping,
+            checkoutSummaryDiscount,
+            checkoutSummaryTotal
+        ].filter(Boolean).forEach(summaryNode => {
+            summaryNode.textContent = '';
+        });
+        cartDiscountLine?.classList.add('hidden');
+        checkoutDiscountLine?.classList.add('hidden');
+        currentQuery = '';
+        searchInput.value = '';
+        searchSuggestions.innerHTML = '';
+        searchSuggestions.classList.add('hidden');
+        const supportChatPanel = document.getElementById('support-chat-panel');
+        const supportChatStatus = document.getElementById('support-chat-status');
+        const supportChatInput = document.getElementById('support-chat-input');
+        supportChatPanel?.classList.add('hidden');
+        if (supportChatStatus) {
+            supportChatStatus.textContent = '';
+        }
+        if (supportChatInput) {
+            supportChatInput.value = '';
+        }
+        if (placeOrderBtn) {
+            placeOrderBtn.disabled = false;
+        }
+
+        window.__pbl3WorkspaceState = null;
+        getWorkspaceState();
+    }
+
+    function replaceAuthenticatedUser(user, options = {}) {
+        const normalizedUser = normalizeUserProfile(user);
+        authStateGeneration += 1;
+        if (options.invalidateCatalog !== false) {
+            catalogLoadGeneration += 1;
+        }
+        currentUser = normalizedUser;
+        purgeRoleScopedClientState();
+        if (options.broadcast !== false) {
+            publishAuthEpoch();
+        }
+    }
+
+    function reloadPublicCatalogAfterSessionClear() {
+        if (publicCatalogRecoveryPromise && publicCatalogRecoveryGeneration === catalogLoadGeneration) {
+            return publicCatalogRecoveryPromise;
+        }
+
+        const recovery = loadProducts({ forcePublic: true });
+        const recoveryGeneration = catalogLoadGeneration;
+        publicCatalogRecoveryPromise = recovery;
+        publicCatalogRecoveryGeneration = recoveryGeneration;
+        void recovery.finally(() => {
+            if (publicCatalogRecoveryPromise === recovery) {
+                publicCatalogRecoveryPromise = null;
+                publicCatalogRecoveryGeneration = 0;
+            }
+        });
+        return recovery;
+    }
+
+
+    function clearSession(options = {}) {
+        const {
+            broadcast = true,
+            force = false,
+            reloadCatalog = true
+        } = options;
+        resetCsrfToken();
+        if (!currentUser && !force) {
+            userDropdown.classList.add('hidden');
+            updateAuthUI();
+            return false;
+        }
+        saveAppliedVoucherCode('');
+        replaceAuthenticatedUser(null, { broadcast });
+        userDropdown.classList.add('hidden');
         updateCartCount();
         updateWishlistCount();
         updateAuthUI();
-        if (['wishlist', 'cart', 'checkout', 'address-book', 'orders', 'workspace', 'promo-hunt'].includes(currentView)) {
-            showCatalogView();
-        } else {
-            void loadHomeRecommendations(true);
+        if (['wishlist', 'cart', 'checkout', 'address-book', 'orders', 'workspace', 'promo-hunt', 'product-detail'].includes(currentView)) {
+            currentView = 'catalog';
         }
+        renderCatalog();
+        if (reloadCatalog) {
+            void reloadPublicCatalogAfterSessionClear();
+        }
+        return true;
+    }
+
+    async function refreshSessionAfterExternalAuthChange() {
+        clearSession({ broadcast: false, force: true, reloadCatalog: false });
+        const refreshAuthContext = captureAuthContext();
+
+        try {
+            const verifiedUser = await apiRequest('/auth/me');
+            if (!isAuthContextCurrent(refreshAuthContext)) {
+                return;
+            }
+            replaceAuthenticatedUser(verifiedUser, { broadcast: false });
+            const verifiedAuthContext = captureAuthContext();
+            await syncCurrentUserStateFromApi();
+            if (!isAuthContextCurrent(verifiedAuthContext)) {
+                return;
+            }
+            updateAuthUI();
+            await loadProducts();
+        } catch (error) {
+            if (isStaleAuthContextError(error) || !isAuthContextCurrent(refreshAuthContext)) {
+                return;
+            }
+            updateAuthUI();
+            await loadProducts({ forcePublic: true });
+        }
+    }
+
+    async function reconcileSessionWithServer() {
+        if (sessionVerificationPromise) {
+            return sessionVerificationPromise;
+        }
+
+        const verificationPromise = (async () => {
+            const verificationAuthContext = captureAuthContext();
+            try {
+                const serverUser = normalizeUserProfile(await apiRequest('/auth/me'));
+                if (!isAuthContextCurrent(verificationAuthContext) || !serverUser) {
+                    return false;
+                }
+
+                const serverAccountId = String(serverUser.id || '').trim();
+                const accountChanged = serverAccountId !== getCurrentAccountStorageSuffix();
+                const roleChanged = getCanonicalRole(serverUser.role) !== getCanonicalRole(currentUser?.role);
+                if (accountChanged || roleChanged) {
+                    replaceAuthenticatedUser(serverUser);
+                    const reconciledAuthContext = captureAuthContext();
+                    await syncCurrentUserStateFromApi();
+                    if (!isAuthContextCurrent(reconciledAuthContext)) {
+                        return false;
+                    }
+                    updateAuthUI();
+                    await loadProducts();
+                    return true;
+                }
+
+                currentUser = serverUser;
+                updateAuthUI();
+                return true;
+            } catch (error) {
+                return false;
+            }
+        })();
+
+        sessionVerificationPromise = verificationPromise;
+        try {
+            return await verificationPromise;
+        } finally {
+            if (sessionVerificationPromise === verificationPromise) {
+                sessionVerificationPromise = null;
+            }
+        }
+    }
+
+    async function refreshVerifiedClientState() {
+        const verified = await reconcileSessionWithServer();
+        await syncAppStateFromApi({ render: true });
+        if (!verified) {
+            return;
+        }
+        await Promise.allSettled([
+            refreshOrderViewsFromApi(true),
+            syncCurrentUserStateFromApi({ render: true })
+        ]);
     }
 
     async function placeOrder() {
@@ -11433,6 +12179,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!ensureCustomerAccess('Hãy đăng nhập trước khi thanh toán.')) {
             return;
         }
+        const orderAuthContext = captureAuthContext();
 
         const selectedAddress = ensureCheckoutAddressSelection();
         if (!selectedAddress) {
@@ -11488,6 +12235,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         const remoteOrder = await createOrderToApi(nextOrder);
+        if (!isAuthContextCurrent(orderAuthContext)) {
+            return;
+        }
         if (!remoteOrder) {
             if (placeOrderBtn) {
                 placeOrderBtn.disabled = false;
@@ -11500,6 +12250,9 @@ document.addEventListener('DOMContentLoaded', () => {
         saveOrderHistory([remoteOrder, ...existingOrders]);
         if (appliedVoucher?.code) {
             await consumeVoucherForCurrentAccount(appliedVoucher.code);
+            if (!isAuthContextCurrent(orderAuthContext)) {
+                return;
+            }
         }
 
         const remainingItems = getCartItems().filter(item => !normalizeCartSelectionFlag(item.selected));
@@ -13093,24 +13846,6 @@ document.addEventListener('DOMContentLoaded', () => {
         return `${'★'.repeat(normalized)}${'☆'.repeat(5 - normalized)}`;
     }
 
-    function buildSampleReviewsForProduct(product) {
-        const reviewerSeeds = [
-            ['Nguyễn Minh', 5, 'Đóng gói cẩn thận, chất lượng hoàn thiện tốt và đúng mô tả.'],
-            ['Trần Huy', 4, 'Cảm giác dùng ổn, phù hợp để tập luyện và giá đang khá hợp lý.'],
-            ['Lê An', 5, 'Mẫu đẹp, lên form tốt và giao hàng nhanh hơn dự kiến.']
-        ];
-
-        return reviewerSeeds.map(([reviewer, rating, content], index) => ({
-            id: `seed-review-${product.id}-${index + 1}`,
-            productId: String(product.id || ''),
-            reviewer,
-            rating,
-            content: `${content} Mình chọn ${product.ten_san_pham || 'sản phẩm này'} và thấy khá yên tâm khi mua.`,
-            status: 'Hiển thị',
-            createdAt: new Date(Date.now() - (index + 1) * 86400000).toISOString()
-        }));
-    }
-
     function getProductReviewsForDetail(product) {
         const visibleReviews = getManagedReviews()
             .filter(review => String(review.productId || '') === String(product.id || ''))
@@ -13124,15 +13859,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 createdAt: review.createdAt || new Date().toISOString()
             }));
 
-        if (visibleReviews.length >= 2) {
-            return visibleReviews.slice(0, 3);
-        }
-
-        const seedReviews = buildSampleReviewsForProduct(product).filter(seed => (
-            !visibleReviews.some(review => normalizeText(review.reviewer) === normalizeText(seed.reviewer))
-        ));
-
-        return [...visibleReviews, ...seedReviews].slice(0, 3);
+        return visibleReviews.slice(0, 3);
     }
 
     function getRelatedProductsForDetail(product) {
@@ -13508,7 +14235,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const reviews = getProductReviewsForDetail(product);
         const averageRating = reviews.length
             ? reviews.reduce((sum, review) => sum + Number(review.rating || 0), 0) / reviews.length
-            : 5;
+            : 0;
 
         currentDetailImageIndex = Math.max(0, Math.min(currentDetailImageIndex, galleryImages.length - 1));
         currentDetailQuantity = Math.min(getCartLineMaxQuantity(product, selection.variant), Math.max(1, currentDetailQuantity));
@@ -13534,7 +14261,9 @@ document.addEventListener('DOMContentLoaded', () => {
         productDetailCategory.textContent = `${product.danh_muc || 'Sản phẩm'} • ${getProductGroupLabel(product)}`;
         productDetailTitle.textContent = product.ten_san_pham || 'Sản phẩm';
         productDetailBrand.textContent = `Thương hiệu: ${product.thuong_hieu || 'Không rõ'}`;
-        productDetailRating.textContent = `${averageRating.toFixed(1)} ${buildProductReviewStars(averageRating)}`;
+        productDetailRating.textContent = reviews.length
+            ? `${averageRating.toFixed(1)} ${buildProductReviewStars(averageRating)}`
+            : 'Chưa có đánh giá';
         productDetailStock.textContent = `Còn ${Number(selection.variant?.ton_kho ?? product.ton_kho ?? 0)} sản phẩm`;
         productDetailPrice.innerHTML = renderPriceDisplay(displayProduct, {
             wrapperClass: 'price-stack product-detail-price-stack',
@@ -13612,18 +14341,20 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
         productDetailReviewCount.textContent = `${reviews.length} đánh giá`;
-        productDetailReviews.innerHTML = reviews.map(review => `
-            <article class="product-review-card">
-                <div class="product-review-head">
-                    <div>
-                        <p class="product-reviewer">${escapeHtml(review.reviewer || 'Khách hàng')}</p>
-                        <p class="product-review-stars">${buildProductReviewStars(review.rating)}</p>
+        productDetailReviews.innerHTML = reviews.length
+            ? reviews.map(review => `
+                <article class="product-review-card">
+                    <div class="product-review-head">
+                        <div>
+                            <p class="product-reviewer">${escapeHtml(review.reviewer || 'Khách hàng')}</p>
+                            <p class="product-review-stars">${buildProductReviewStars(review.rating)}</p>
+                        </div>
+                        <p class="product-review-meta">${escapeHtml(new Date(review.createdAt).toLocaleDateString('vi-VN'))}</p>
                     </div>
-                    <p class="product-review-meta">${escapeHtml(new Date(review.createdAt).toLocaleDateString('vi-VN'))}</p>
-                </div>
-                <p class="product-review-content">${escapeHtml(review.content || '')}</p>
-            </article>
-        `).join('');
+                    <p class="product-review-content">${escapeHtml(review.content || '')}</p>
+                </article>
+            `).join('')
+            : '<p class="workspace-empty">Sản phẩm này chưa có đánh giá từ khách hàng.</p>';
 
         const hasFreshDetailRecommendations = detailRecommendationSignature.endsWith(`:detail:${String(product.id)}`);
         const relatedProducts = hasFreshDetailRecommendations && detailRecommendationProducts.length
@@ -14020,7 +14751,7 @@ document.addEventListener('DOMContentLoaded', () => {
             catalogToolbar.classList.add('hidden');
             collectionView.classList.add('hidden');
             activeFilters.classList.add('hidden');
-            productContainer.classList.add('hidden');
+            productContainer.classList.toggle('hidden', !productLoadError);
             productDetailView?.classList.add('hidden');
             syncSupportChatVisibility();
             return;
@@ -14103,15 +14834,24 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function sendBehaviorEvent(requestBody, options = {}) {
+        const requestAuthContext = captureAuthContext();
         const headers = getAnalyticsHeaders();
-        headers['X-XSRF-TOKEN'] = await ensureCsrfToken();
-        return fetch(`${API_BASE}/analytics/events`, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify(requestBody),
-            keepalive: Boolean(options.keepalive),
-            credentials: 'same-origin'
-        }).catch(() => null);
+        try {
+            headers['X-XSRF-TOKEN'] = await ensureCsrfToken();
+            if (!isAuthContextCurrent(requestAuthContext)) {
+                return null;
+            }
+            const response = await fetch(`${API_BASE}/analytics/events`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(requestBody),
+                keepalive: Boolean(options.keepalive),
+                credentials: 'same-origin'
+            });
+            return isAuthContextCurrent(requestAuthContext) ? response : null;
+        } catch (error) {
+            return null;
+        }
     }
 
     function persistLocalBehaviorEvent(event = {}) {
@@ -14503,6 +15243,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function fetchRecommendationProducts(context, options = {}) {
+        const requestAuthContext = captureAuthContext();
         const cacheKey = getRecommendationCacheKey(context, options);
         const cachedProducts = readCachedRecommendationProducts(cacheKey);
         if (cachedProducts) {
@@ -14530,11 +15271,14 @@ document.addEventListener('DOMContentLoaded', () => {
             const response = await fetch(`${API_BASE}/analytics/recommendations?${params.toString()}`, {
                 credentials: 'same-origin'
             });
-            if (!response.ok) {
+            if (!response.ok || !isAuthContextCurrent(requestAuthContext)) {
                 return [];
             }
 
             const text = await response.text();
+            if (!isAuthContextCurrent(requestAuthContext)) {
+                return [];
+            }
             const data = text ? normalizePayload(safeJsonParse(text)) : [];
             const products = (Array.isArray(data) ? data : [])
                 .map(product => findProductById(product?.id) || enrichProduct(product))
@@ -14549,11 +15293,14 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (error) {
             return [];
         } finally {
-            recommendationFetchPromises.delete(cacheKey);
+            if (recommendationFetchPromises.get(cacheKey) === requestPromise) {
+                recommendationFetchPromises.delete(cacheKey);
+            }
         }
     }
 
     async function loadHomeRecommendations(force = false) {
+        const requestAuthContext = captureAuthContext();
         const shouldShow = shouldShowHomeRecommendations() && allProducts.length > 0;
         if (!shouldShow) {
             personalizedHomeProducts = [];
@@ -14572,7 +15319,11 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         homeRecommendationSignature = signature;
-        personalizedHomeProducts = await fetchRecommendationProducts('home', { limit: 18 });
+        const recommendedProducts = await fetchRecommendationProducts('home', { limit: 18 });
+        if (!isAuthContextCurrent(requestAuthContext) || homeRecommendationSignature !== signature) {
+            return;
+        }
+        personalizedHomeProducts = recommendedProducts;
         renderHomeSaleShowcase();
         renderHomeFeatureStrip();
         renderPersonalizedHomeRecommendations();
@@ -14675,6 +15426,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function loadDetailRecommendations(productId, force = false) {
+        const requestAuthContext = captureAuthContext();
         const normalizedProductId = String(productId || '').trim();
         if (!normalizedProductId) {
             detailRecommendationProducts = [];
@@ -14688,10 +15440,14 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         detailRecommendationSignature = signature;
-        detailRecommendationProducts = await fetchRecommendationProducts('detail', {
+        const recommendedProducts = await fetchRecommendationProducts('detail', {
             productId: normalizedProductId,
             limit: 6
         });
+        if (!isAuthContextCurrent(requestAuthContext) || detailRecommendationSignature !== signature) {
+            return;
+        }
+        detailRecommendationProducts = recommendedProducts;
 
         if (currentView === 'product-detail' && String(currentDetailProductId) === normalizedProductId) {
             renderProductDetailRelatedProducts();
@@ -14699,6 +15455,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function loadCartRecommendations(force = false) {
+        const requestAuthContext = captureAuthContext();
         const cartProductIds = getHydratedCartItems()
             .map(item => item.productId)
             .filter(Boolean)
@@ -14718,10 +15475,14 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         cartRecommendationSignature = signature;
-        cartRecommendationProducts = await fetchRecommendationProducts('cart', {
+        const recommendedProducts = await fetchRecommendationProducts('cart', {
             productIds: cartProductIds,
             limit: 6
         });
+        if (!isAuthContextCurrent(requestAuthContext) || cartRecommendationSignature !== signature) {
+            return;
+        }
+        cartRecommendationProducts = recommendedProducts;
         renderCartRecommendations();
     }
 
@@ -14744,6 +15505,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        const requestAuthGeneration = authStateGeneration;
         const state = getStatsFilterState();
         const params = new URLSearchParams();
         if (state.statsStartDate) {
@@ -14757,9 +15519,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
         try {
             const remoteOverview = await apiRequest(`/admin/analytics/overview?${params.toString()}`);
+            if (requestAuthGeneration !== authStateGeneration || !isManagerWorkspaceUser()) {
+                return;
+            }
             adminBehaviorOverview = mergeAdminBehaviorOverview(remoteOverview, localOverview);
             adminBehaviorOverviewError = '';
         } catch (error) {
+            if (requestAuthGeneration !== authStateGeneration || !isManagerWorkspaceUser()) {
+                return;
+            }
             adminBehaviorOverview = localOverview;
             adminBehaviorOverviewError = Number(localOverview.totalEvents || 0) ? '' : error.message;
         }
@@ -15035,7 +15803,12 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        const requestAuthGeneration = authStateGeneration;
         await ensureManagerAccountsLoaded();
+        if (requestAuthGeneration !== authStateGeneration || !isManagerWorkspaceUser()) {
+            userListBody.innerHTML = '';
+            return;
+        }
         const accounts = getManagedAccounts();
         const table = userListBody.closest('table');
         if (table) {
@@ -15512,7 +16285,12 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        const requestAuthGeneration = authStateGeneration;
         await ensureManagerAccountsLoaded();
+        if (requestAuthGeneration !== authStateGeneration || !isManagerWorkspaceUser()) {
+            userListBody.innerHTML = '';
+            return;
+        }
         syncAccountFilterInputs();
 
         const allAccounts = getManagedAccounts();
@@ -15947,325 +16725,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    function getExtendedSportProductsSeed() {
-        return [
-            {
-                id: 'product-140',
-                ten_san_pham: 'Nike Pegasus 41',
-                sku: 'RUN-001',
-                danh_muc: 'Chạy bộ',
-                thuong_hieu: 'Nike',
-                size: '40-44',
-                mau: 'Xanh dương / Trắng',
-                gia_nhap: 2490000,
-                gia_ban: 3490000,
-                ton_kho: 12,
-                trang_thai: 'Đang bán',
-                hinh_anh_url: '',
-                bien_the_json: null,
-                mo_ta: 'Mẫu giày chạy bộ road running thuộc dòng Pegasus 41 của Nike, phù hợp cho chạy hằng ngày với độ đàn hồi cân bằng và cảm giác ổn định.',
-                ghi_chu: 'Nguồn tham chiếu: Nike official - Pegasus 41.',
-                created_at: '2026-04-23 08:00:00',
-                updated_at: '2026-04-23 08:00:00',
-                is_deleted: 0
-            },
-            {
-                id: 'product-141',
-                ten_san_pham: 'Nike Vomero 18',
-                sku: 'RUN-002',
-                danh_muc: 'Chạy bộ',
-                thuong_hieu: 'Nike',
-                size: '40-44',
-                mau: 'Trắng / Xanh navy',
-                gia_nhap: 2790000,
-                gia_ban: 3790000,
-                ton_kho: 9,
-                trang_thai: 'Đang bán',
-                hinh_anh_url: '',
-                bien_the_json: null,
-                mo_ta: 'Giày road running thiên về êm ái thuộc dòng Vomero 18, phù hợp cho runner cần đệm dày và cảm giác mềm khi chạy quãng đường dài.',
-                ghi_chu: 'Nguồn tham chiếu: Nike official - Vomero 18.',
-                created_at: '2026-04-23 08:01:00',
-                updated_at: '2026-04-23 08:01:00',
-                is_deleted: 0
-            },
-            {
-                id: 'product-142',
-                ten_san_pham: 'ASICS GEL-NIMBUS 27',
-                sku: 'RUN-003',
-                danh_muc: 'Chạy bộ',
-                thuong_hieu: 'ASICS',
-                size: '40-44',
-                mau: 'Trắng / Bạc',
-                gia_nhap: 2650000,
-                gia_ban: 3650000,
-                ton_kho: 8,
-                trang_thai: 'Đang bán',
-                hinh_anh_url: '',
-                bien_the_json: null,
-                mo_ta: 'Mẫu giày chạy bộ cao cấp GEL-NIMBUS 27 của ASICS nổi bật với đệm êm, phù hợp cho chạy daily training và recovery run.',
-                ghi_chu: 'Nguồn tham chiếu: ASICS official - GEL-NIMBUS 27.',
-                created_at: '2026-04-23 08:02:00',
-                updated_at: '2026-04-23 08:02:00',
-                is_deleted: 0
-            },
-            {
-                id: 'product-143',
-                ten_san_pham: 'ASICS GEL-KAYANO 31',
-                sku: 'RUN-004',
-                danh_muc: 'Chạy bộ',
-                thuong_hieu: 'ASICS',
-                size: '40-44',
-                mau: 'Đen / Xanh ngọc',
-                gia_nhap: 2890000,
-                gia_ban: 3990000,
-                ton_kho: 7,
-                trang_thai: 'Đang bán',
-                hinh_anh_url: '',
-                bien_the_json: null,
-                mo_ta: 'GEL-KAYANO 31 là dòng stability running shoe của ASICS, phù hợp với runner cần hỗ trợ tốt hơn cho những buổi chạy hằng ngày.',
-                ghi_chu: 'Nguồn tham chiếu: ASICS official - GEL-KAYANO 31.',
-                created_at: '2026-04-23 08:03:00',
-                updated_at: '2026-04-23 08:03:00',
-                is_deleted: 0
-            },
-            {
-                id: 'product-144',
-                ten_san_pham: 'Nike Miler Men\'s Dri-FIT Short-Sleeve Running Top',
-                sku: 'RUN-005',
-                danh_muc: 'Chạy bộ',
-                thuong_hieu: 'Nike',
-                size: 'M-L',
-                mau: 'Xám / Đen',
-                gia_nhap: 690000,
-                gia_ban: 990000,
-                ton_kho: 15,
-                trang_thai: 'Đang bán',
-                hinh_anh_url: '',
-                bien_the_json: null,
-                mo_ta: 'Áo chạy bộ tay ngắn Nike Miler dùng chất liệu Dri-FIT, thoáng khí và phù hợp cho các buổi chạy hằng ngày trong thời tiết nóng.',
-                ghi_chu: 'Nguồn tham chiếu: Nike official - Miler Running Top.',
-                created_at: '2026-04-23 08:04:00',
-                updated_at: '2026-04-23 08:04:00',
-                is_deleted: 0
-            },
-            {
-                id: 'product-145',
-                ten_san_pham: 'Nike Stride Men\'s Dri-FIT 7\" 2-in-1 Running Shorts',
-                sku: 'RUN-006',
-                danh_muc: 'Chạy bộ',
-                thuong_hieu: 'Nike',
-                size: 'M-L',
-                mau: 'Đen',
-                gia_nhap: 790000,
-                gia_ban: 1090000,
-                ton_kho: 14,
-                trang_thai: 'Đang bán',
-                hinh_anh_url: '',
-                bien_the_json: null,
-                mo_ta: 'Quần chạy bộ 2 trong 1 Nike Stride dài 7 inch, tối ưu cho vận động linh hoạt và kiểm soát mồ hôi trong các buổi chạy cường độ vừa.',
-                ghi_chu: 'Nguồn tham chiếu: Nike official - Stride 7 inch 2-in-1 Running Shorts.',
-                created_at: '2026-04-23 08:05:00',
-                updated_at: '2026-04-23 08:05:00',
-                is_deleted: 0
-            },
-            {
-                id: 'product-146',
-                ten_san_pham: 'ASICS ROAD PACKABLE JACKET',
-                sku: 'RUN-007',
-                danh_muc: 'Chạy bộ',
-                thuong_hieu: 'ASICS',
-                size: 'M-L',
-                mau: 'Xanh navy',
-                gia_nhap: 1390000,
-                gia_ban: 1890000,
-                ton_kho: 10,
-                trang_thai: 'Đang bán',
-                hinh_anh_url: '',
-                bien_the_json: null,
-                mo_ta: 'Áo khoác chạy bộ ROAD PACKABLE JACKET của ASICS có thể gấp gọn, phù hợp cho runner cần lớp ngoài nhẹ khi thời tiết thay đổi.',
-                ghi_chu: 'Nguồn tham chiếu: ASICS official - ROAD PACKABLE JACKET.',
-                created_at: '2026-04-23 08:06:00',
-                updated_at: '2026-04-23 08:06:00',
-                is_deleted: 0
-            },
-            {
-                id: 'product-147',
-                ten_san_pham: 'Nike Metcon 9',
-                sku: 'GYM-001',
-                danh_muc: 'Tập gym',
-                thuong_hieu: 'Nike',
-                size: '40-44',
-                mau: 'Đen / Trắng',
-                gia_nhap: 3190000,
-                gia_ban: 4290000,
-                ton_kho: 8,
-                trang_thai: 'Đang bán',
-                hinh_anh_url: '',
-                bien_the_json: null,
-                mo_ta: 'Nike Metcon 9 là mẫu giày workout chuyên cho tập gym, hỗ trợ các bài sức mạnh, conditioning và bài tập toàn thân trong phòng tập.',
-                ghi_chu: 'Nguồn tham chiếu: Nike official - Metcon 9.',
-                created_at: '2026-04-23 08:07:00',
-                updated_at: '2026-04-23 08:07:00',
-                is_deleted: 0
-            },
-            {
-                id: 'product-148',
-                ten_san_pham: 'Nike Free Metcon 6',
-                sku: 'GYM-002',
-                danh_muc: 'Tập gym',
-                thuong_hieu: 'Nike',
-                size: '40-44',
-                mau: 'Trắng / Xám',
-                gia_nhap: 2590000,
-                gia_ban: 3590000,
-                ton_kho: 9,
-                trang_thai: 'Đang bán',
-                hinh_anh_url: '',
-                bien_the_json: null,
-                mo_ta: 'Free Metcon 6 kết hợp độ linh hoạt của Nike Free với sự ổn định cho tập gym, phù hợp cho circuit training và bài tập cường độ cao.',
-                ghi_chu: 'Nguồn tham chiếu: Nike official - Free Metcon 6.',
-                created_at: '2026-04-23 08:08:00',
-                updated_at: '2026-04-23 08:08:00',
-                is_deleted: 0
-            },
-            {
-                id: 'product-149',
-                ten_san_pham: 'Nike Dri-FIT Primary Men\'s Training T-Shirt',
-                sku: 'GYM-003',
-                danh_muc: 'Tập gym',
-                thuong_hieu: 'Nike',
-                size: 'M-L',
-                mau: 'Xanh rêu',
-                gia_nhap: 690000,
-                gia_ban: 950000,
-                ton_kho: 16,
-                trang_thai: 'Đang bán',
-                hinh_anh_url: '',
-                bien_the_json: null,
-                mo_ta: 'Áo tập gym Nike Dri-FIT Primary là lựa chọn cơ bản cho các buổi workout nhờ chất vải thấm hút tốt và phom dễ vận động.',
-                ghi_chu: 'Nguồn tham chiếu: Nike official - Dri-FIT Primary Training T-Shirt.',
-                created_at: '2026-04-23 08:09:00',
-                updated_at: '2026-04-23 08:09:00',
-                is_deleted: 0
-            },
-            {
-                id: 'product-150',
-                ten_san_pham: 'Nike Pro Men\'s Dri-FIT Fitness Tights',
-                sku: 'GYM-004',
-                danh_muc: 'Tập gym',
-                thuong_hieu: 'Nike',
-                size: 'M-L',
-                mau: 'Đen',
-                gia_nhap: 790000,
-                gia_ban: 1090000,
-                ton_kho: 12,
-                trang_thai: 'Đang bán',
-                hinh_anh_url: '',
-                bien_the_json: null,
-                mo_ta: 'Quần tights Nike Pro Dri-FIT phù hợp cho squat, deadlift và các bài tập cường độ cao, hỗ trợ ôm cơ và thoát mồ hôi.',
-                ghi_chu: 'Nguồn tham chiếu: Nike official - Pro Fitness Tights.',
-                created_at: '2026-04-23 08:10:00',
-                updated_at: '2026-04-23 08:10:00',
-                is_deleted: 0
-            },
-            {
-                id: 'product-151',
-                ten_san_pham: 'Nike Brasilia 9.5 Training Duffel Bag (Medium, 60L)',
-                sku: 'GYM-005',
-                danh_muc: 'Tập gym',
-                thuong_hieu: 'Nike',
-                size: '60L',
-                mau: 'Đen / Trắng',
-                gia_nhap: 790000,
-                gia_ban: 1090000,
-                ton_kho: 11,
-                trang_thai: 'Đang bán',
-                hinh_anh_url: '',
-                bien_the_json: null,
-                mo_ta: 'Túi tập Nike Brasilia 9.5 dung tích 60L phù hợp mang giày, quần áo tập và phụ kiện cho lịch tập gym hằng ngày.',
-                ghi_chu: 'Nguồn tham chiếu: Nike official - Brasilia 9.5 Training Duffel Bag.',
-                created_at: '2026-04-23 08:11:00',
-                updated_at: '2026-04-23 08:11:00',
-                is_deleted: 0
-            },
-            {
-                id: 'product-152',
-                ten_san_pham: 'Nike Brasilia 9.5 Training Backpack (Medium, 24L)',
-                sku: 'GYM-006',
-                danh_muc: 'Tập gym',
-                thuong_hieu: 'Nike',
-                size: '24L',
-                mau: 'Đen / Trắng',
-                gia_nhap: 690000,
-                gia_ban: 950000,
-                ton_kho: 13,
-                trang_thai: 'Đang bán',
-                hinh_anh_url: '',
-                bien_the_json: null,
-                mo_ta: 'Balo Nike Brasilia 9.5 Training Backpack thích hợp cho người tập gym cần mang laptop, bình nước và quần áo tập trong một ngày.',
-                ghi_chu: 'Nguồn tham chiếu: Nike official - Brasilia 9.5 Training Backpack.',
-                created_at: '2026-04-23 08:12:00',
-                updated_at: '2026-04-23 08:12:00',
-                is_deleted: 0
-            }
-        ];
-    }
-
-    function mergeWithExtendedSportProducts(baseProducts) {
-        const list = Array.isArray(baseProducts) ? baseProducts : [];
-        const existingKeys = new Set(
-            list.map(product => String(product?.sku || product?.id || '').trim()).filter(Boolean)
-        );
-        const seededProducts = [
-            ...getExtendedSportProductsSeed(),
-            ...getWorldCup2026KitProductsSeed()
-        ];
-
-        return [
-            ...list,
-            ...seededProducts.filter(product => !existingKeys.has(String(product.sku || product.id || '').trim()))
-        ];
-    }
-
-    function getWorldCup2026KitProductsSeed() {
-        const teams = [
-            ['product-201', 'WC-001', 'Đức', 'Limited', 'Đen / Vàng|Đen', 520000, 890000, 28, './assets/images/products/Bong-Da/WC-001/Black-Gold.png.webp|./assets/images/products/Bong-Da/WC-001/Black.png.webp'],
-            ['product-202', 'WC-002', 'Pháp', 'Limited', 'Xanh dương / Trắng|Xanh dương', 540000, 920000, 30, './assets/images/products/Bong-Da/WC-002/Blue-White.png.webp|./assets/images/products/Bong-Da/WC-002/Blue.png.webp'],
-            ['product-203', 'WC-003', 'Anh', 'Limited', 'Đỏ|Trắng', 510000, 870000, 24, './assets/images/products/Bong-Da/WC-003/Red.png.webp|./assets/images/products/Bong-Da/WC-003/White.png.webp'],
-            ['product-204', 'WC-004', 'Brazil', 'Limited', 'Xanh dương|Vàng', 560000, 950000, 32, './assets/images/products/Bong-Da/WC-004/Blue.png.webp|./assets/images/products/Bong-Da/WC-004/Yellow.png.webp'],
-            ['product-205', 'WC-005', 'Bồ Đào Nha', 'Limited', 'Đen|Đỏ', 550000, 930000, 29, './assets/images/products/Bong-Da/WC-005/Black.png.webp|./assets/images/products/Bong-Da/WC-005/Red.png.webp'],
-            ['product-206', 'WC-006', 'Tây Ban Nha', 'Limited', 'Xanh dương|Đỏ', 530000, 900000, 26, './assets/images/products/Bong-Da/WC-006/Blue.png.webp|./assets/images/products/Bong-Da/WC-006/Red.png.webp'],
-            ['product-207', 'WC-007', 'Hàn Quốc', 'Limited', 'Đen|Tím|Đỏ', 500000, 850000, 23, './assets/images/products/Bong-Da/WC-007/Black.png.webp|./assets/images/products/Bong-Da/WC-007/Purple.png.webp|./assets/images/products/Bong-Da/WC-007/Red.png.webp'],
-            ['product-208', 'WC-008', 'Nhật Bản', 'Limited', 'Tím', 510000, 870000, 25, './assets/images/products/Bong-Da/WC-008/Purple.png.webp|./assets/images/products/Bong-Da/WC-008/Purple2.png.webp'],
-            ['product-209', 'WC-009', 'Croatia', 'Limited', 'Đỏ / Trắng', 520000, 880000, 22, './assets/images/products/Bong-Da/WC-009/Red-White.png.webp'],
-            ['product-210', 'WC-010', 'Argentina', 'Limited', 'Xanh đậm|Trắng / Xanh dương', 520000, 890000, 27, './assets/images/products/Bong-Da/WC-010/Dark-Blue.png.webp|./assets/images/products/Bong-Da/WC-010/White-Blue.png.webp'],
-            ['product-211', 'WC-011', 'Uruguay', 'Limited', 'Xanh dương|Đỏ', 500000, 850000, 21, './assets/images/products/Bong-Da/WC-011/Blue.png.webp|./assets/images/products/Bong-Da/WC-011/Red.png.webp'],
-            ['product-212', 'WC-012', 'Bỉ', 'Limited', 'Đỏ', 510000, 870000, 24, './assets/images/products/Bong-Da/WC-012/Red.png.webp']
-        ];
-
-        return teams.map(([id, sku, team, brand, color, cost, price, stock, imageUrls], index) => ({
-            id,
-            ten_san_pham: `Bộ đồ đội tuyển ${team} WorldCup 2026`,
-            sku,
-            danh_muc: 'Bóng đá',
-            thuong_hieu: brand,
-            size: 'S-XL',
-            mau: color,
-            gia_nhap: cost,
-            gia_ban: price,
-            ton_kho: stock,
-            trang_thai: 'Đang bán',
-            hinh_anh_url: imageUrls,
-            bien_the_json: null,
-            mo_ta_ngan: `Bộ áo quần phong cách đội tuyển ${team} cho mùa WorldCup 2026, chất vải thể thao thoáng nhẹ, phù hợp mặc cổ vũ và đá bóng phong trào.`,
-            ghi_chu: 'WorldCup 2026 featured kit.',
-            created_at: `2026-05-25 08:${String(index).padStart(2, '0')}:00`,
-            updated_at: `2026-05-25 08:${String(index).padStart(2, '0')}:00`,
-            is_deleted: 0
-        }));
-    }
-
     ensureSportSectionRegistered({
         sport: 'Chạy bộ',
         icon: 'fa-person-running',
@@ -16383,11 +16842,17 @@ document.addEventListener('DOMContentLoaded', () => {
         return itemIds;
     }
 
-    async function loadProducts() {
+    async function loadProducts(options = {}) {
+        const manageProducts = options.forcePublic ? false : canManageProducts();
+        const requestGeneration = ++catalogLoadGeneration;
+        productLoadError = '';
         productContainer.innerHTML = '<p class="loading-text">Đang tải sản phẩm...</p>';
 
         try {
-            const products = await fetchProductsFromApi();
+            const products = await fetchProductsFromApi(manageProducts);
+            if (requestGeneration !== catalogLoadGeneration || manageProducts !== canManageProducts()) {
+                return;
+            }
             // A reachable backend is the catalog authority.  Do not silently
             // augment an empty/partial server response with browser-only SKUs,
             // because those records cannot be checked out or inventory-locked.
@@ -16410,14 +16875,20 @@ document.addEventListener('DOMContentLoaded', () => {
             renderInternalWorkspace();
             syncSupportChatVisibility();
         } catch (error) {
-            allProducts = mergeWithExtendedSportProducts([]).map(enrichProduct);
-            productsLoaded = true;
+            if (requestGeneration !== catalogLoadGeneration || manageProducts !== canManageProducts()) {
+                return;
+            }
+            console.warn('Không thể tải danh mục sản phẩm từ máy chủ.', error);
+            allProducts = [];
+            productsLoaded = false;
+            productLoadError = 'Không thể tải danh mục sản phẩm từ máy chủ. Vui lòng kiểm tra kết nối và thử lại.';
             rebuildProductSearchIndex(allProducts);
             invalidateRecommendationCache();
             renderCatalog();
             renderAdminProductList();
             renderInternalWorkspace();
             syncSupportChatVisibility();
+            showCenteredMessage(productLoadError, 'error');
         }
     }
 
@@ -16585,17 +17056,14 @@ document.addEventListener('DOMContentLoaded', () => {
         void refreshOrderViewsFromApi(true);
     }, 5000);
     window.setInterval(() => {
-        void syncAppStateFromApi({ render: true });
-        void syncCurrentUserStateFromApi({ render: true });
+        void refreshVerifiedClientState();
     }, 30000);
     window.addEventListener('focus', () => {
-        void refreshOrderViewsFromApi(true);
-        void syncAppStateFromApi({ render: true });
-        void syncCurrentUserStateFromApi({ render: true });
+        void refreshVerifiedClientState();
     });
     document.addEventListener('visibilitychange', () => {
         if (!document.hidden) {
-            void refreshOrderViewsFromApi(true);
+            void refreshVerifiedClientState();
         }
     });
     syncSupportChatVisibility();

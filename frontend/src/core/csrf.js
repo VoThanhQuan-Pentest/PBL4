@@ -11,13 +11,22 @@ export async function getCsrfToken() {
         }
         return response.json();
       })
-      .then(payload => payload.token);
+      .then(payload => {
+        const token = typeof payload?.token === 'string' ? payload.token.trim() : '';
+        if (!token) {
+          throw new Error('Unable to obtain CSRF token');
+        }
+        return token;
+      });
   }
 
+  const activeTokenPromise = tokenPromise;
   try {
-    return await tokenPromise;
+    return await activeTokenPromise;
   } catch (error) {
-    tokenPromise = undefined;
+    if (tokenPromise === activeTokenPromise) {
+      tokenPromise = undefined;
+    }
     throw error;
   }
 }

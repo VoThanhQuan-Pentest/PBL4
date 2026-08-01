@@ -1,15 +1,18 @@
 /opt/flare/nginx-logs/*.log {
     daily
-    size 10M
+    maxsize 10M
     rotate 7
     missingok
     notifempty
     compress
     delaycompress
     dateext
-    create 0640 root root
+    # nginx is 101:101; Filebeat reads through its fixed GID 1000.
+    create 0640 101 1000
     sharedscripts
     postrotate
-        /usr/bin/docker compose --project-name flare --project-directory /opt/flare kill -s USR1 nginx >/dev/null 2>&1 || true
+        if /usr/bin/docker compose --project-name flare --project-directory /opt/flare ps --status running --quiet nginx 2>/dev/null | /usr/bin/grep -q .; then
+            /usr/bin/docker compose --project-name flare --project-directory /opt/flare kill -s USR1 nginx >/dev/null 2>&1 || { /usr/bin/logger -p daemon.err -t flare-nginx-logrotate 'Failed to signal running nginx after log rotation'; exit 1; }
+        fi
     endscript
 }

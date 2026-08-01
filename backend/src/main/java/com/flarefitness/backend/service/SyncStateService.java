@@ -8,6 +8,7 @@ import com.flarefitness.backend.dto.sync.SyncStateResponse;
 import com.flarefitness.backend.entity.User;
 import com.flarefitness.backend.entity.sync.SyncState;
 import com.flarefitness.backend.exception.BadRequestException;
+import com.flarefitness.backend.exception.ResourceGoneException;
 import com.flarefitness.backend.exception.UnauthorizedException;
 import com.flarefitness.backend.repository.sync.SyncStateRepository;
 import com.flarefitness.backend.security.CurrentUserPrincipal;
@@ -37,9 +38,9 @@ public class SyncStateService {
     private static final Set<String> PUBLIC_APP_KEYS = Set.of(
             "home-showcase-visible",
             "category-registry",
-            "managed-reviews",
             "managed-vouchers"
     );
+    private static final Set<String> RETIRED_APP_KEYS = Set.of("managed-reviews");
 
     private final SyncStateRepository syncStateRepository;
     private final VoucherPricingService voucherPricingService;
@@ -93,7 +94,7 @@ public class SyncStateService {
         User user = requireUser(authentication);
         String normalizedKey = normalizeAppKey(key);
         if (!isStaffOrAdmin(user)) {
-            throw new UnauthorizedException("Ban khong co quyen cap nhat du lieu dung chung.");
+            throw new AccessDeniedException("Ban khong co quyen cap nhat du lieu dung chung.");
         }
         if ("managed-vouchers".equals(normalizedKey)) {
             String payload = request == null ? null : request.payload();
@@ -173,7 +174,7 @@ public class SyncStateService {
         if ("category-registry".equals(key) && (!root.isObject() || root.size() > 300)) {
             throw new BadRequestException("Danh muc dong bo khong hop le.");
         }
-        if (("managed-reviews".equals(key) || "managed-vouchers".equals(key))
+        if ("managed-vouchers".equals(key)
                 && (!root.isArray() || root.size() > 1_000)) {
             throw new BadRequestException("Danh sach dong bo khong hop le.");
         }
@@ -189,6 +190,9 @@ public class SyncStateService {
 
     private String normalizeAppKey(String key) {
         String normalized = normalizeKey(key);
+        if (RETIRED_APP_KEYS.contains(normalized)) {
+            throw new ResourceGoneException("Tai nguyen dong bo da ngung ho tro.");
+        }
         if (!PUBLIC_APP_KEYS.contains(normalized)) {
             throw new BadRequestException("Sync key khong hop le.");
         }
@@ -220,7 +224,7 @@ public class SyncStateService {
     private User requireCustomer(Authentication authentication) {
         User user = requireUser(authentication);
         if (!isCustomer(user)) {
-            throw new UnauthorizedException("Chuc nang nay chi danh cho khach hang.");
+            throw new AccessDeniedException("Chuc nang nay chi danh cho khach hang.");
         }
         return user;
     }

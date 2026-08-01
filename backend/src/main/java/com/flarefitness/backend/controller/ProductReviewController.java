@@ -3,6 +3,7 @@ package com.flarefitness.backend.controller;
 import com.flarefitness.backend.dto.review.ProductReviewRequest;
 import com.flarefitness.backend.dto.review.ProductReviewResponse;
 import com.flarefitness.backend.dto.review.ProductReviewStatusRequest;
+import com.flarefitness.backend.dto.review.PublicProductReviewResponse;
 import com.flarefitness.backend.dto.common.PageResponse;
 import com.flarefitness.backend.service.ProductReviewService;
 import jakarta.validation.Valid;
@@ -31,7 +32,7 @@ public class ProductReviewController {
     }
 
     @GetMapping("/products/{productId}")
-    public List<ProductReviewResponse> getProductReviews(@PathVariable String productId) {
+    public List<PublicProductReviewResponse> getProductReviews(@PathVariable String productId) {
         return productReviewService.getVisibleReviewsByProduct(productId);
     }
 
@@ -41,7 +42,7 @@ public class ProductReviewController {
     }
 
     @GetMapping("/products/{productId}/page")
-    public PageResponse<ProductReviewResponse> getProductReviewsPage(
+    public PageResponse<PublicProductReviewResponse> getProductReviewsPage(
             @PathVariable String productId,
             @RequestParam(defaultValue = "0") Integer page,
             @RequestParam(defaultValue = "20") Integer size

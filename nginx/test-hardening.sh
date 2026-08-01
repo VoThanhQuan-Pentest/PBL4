@@ -183,6 +183,67 @@ if printf '%s' "$heuristic_event" | grep -Fqi 'union%20select'; then
   exit 1
 fi
 
+# Nginx rejects an encoded slash in the path while parsing the request, before
+# this server's custom access log can emit a detection event. Preserve that
+# parser-level defense as its own contract; query variants below exercise the
+# traversal heuristic because Nginx preserves their encoded bytes.
+encoded_path_response=$(headers -H 'Host: localhost' --path-as-is \
+  "${BASE_URL}/..%2F..%2Fetc%2Fpasswd")
+if ! printf '%s\n' "$encoded_path_response" | grep -q '^HTTP/.* 400'; then
+  printf 'Mixed-encoding traversal path was not rejected with HTTP 400\n' >&2
+  exit 1
+fi
+
+# Query-based probes follow the same detection path while the raw query stays
+# redacted. Cover both encoded and double-encoded separators.
+headers -H 'Host: localhost' --path-as-is \
+  "${BASE_URL}/?file=..%2F..%2Fetc%2Fpasswd" >/dev/null
+query_traversal_event=$(docker exec "$WEB" sh -c 'tail -n 1 /var/log/nginx/access.json.log')
+if ! printf '%s' "$query_traversal_event" | jq -e \
+  '."url.path" == "/" and ."url.query" == "[REDACTED]" and
+   ."url.original" == "/?[REDACTED]" and
+   ."flare.detection.type" == "path_traversal_signal"' >/dev/null; then
+  printf 'Mixed-encoding query traversal heuristic/redaction contract failed\n' >&2
+  exit 1
+fi
+if printf '%s' "$query_traversal_event" | grep -Fqi '..%2F..%2Fetc%2Fpasswd'; then
+  printf 'Traversal query payload leaked into the Nginx access log\n' >&2
+  exit 1
+fi
+
+headers -H 'Host: localhost' --path-as-is \
+  "${BASE_URL}/?file=..%252F..%252Fetc%252Fpasswd" >/dev/null
+double_encoded_traversal_event=$(docker exec "$WEB" sh -c 'tail -n 1 /var/log/nginx/access.json.log')
+if ! printf '%s' "$double_encoded_traversal_event" | jq -e \
+  '."url.query" == "[REDACTED]" and
+   ."flare.detection.type" == "path_traversal_signal"' >/dev/null; then
+  printf 'Double-encoded query traversal heuristic/redaction contract failed\n' >&2
+  exit 1
+fi
+
+for mixed_traversal_query in \
+  '.%252e%252fetc%252fpasswd' \
+  '%252e.%252fetc%252fpasswd' \
+  '%2e%252e%252fetc%252fpasswd'; do
+  headers -H 'Host: localhost' --path-as-is \
+    "${BASE_URL}/?file=${mixed_traversal_query}" >/dev/null
+  mixed_traversal_event=$(docker exec "$WEB" sh -c 'tail -n 1 /var/log/nginx/access.json.log')
+  if ! printf '%s' "$mixed_traversal_event" | jq -e \
+    '."url.path" == "/" and ."url.query" == "[REDACTED]" and
+     ."url.original" == "/?[REDACTED]" and
+     ."flare.detection.type" == "path_traversal_signal" and
+     ."flare.detection.severity" == "high" and
+     ."flare.detection.reason" == "URL matched a path traversal heuristic"' >/dev/null; then
+    printf 'Mixed/double-encoded query traversal heuristic failed for %s\n' \
+      "$mixed_traversal_query" >&2
+    exit 1
+  fi
+  if printf '%s' "$mixed_traversal_event" | grep -Fqi "$mixed_traversal_query"; then
+    printf 'Mixed/double-encoded traversal query leaked into the access log\n' >&2
+    exit 1
+  fi
+done
+
 if printf '%s\n%s\n%s\n%s\n' "$index_response" "$asset_response" "$api_response" "$spoof_response" | grep -qi '^Server: nginx/'; then
   printf 'Nginx version is exposed in a Server header\n' >&2
   exit 1

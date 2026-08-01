@@ -17,7 +17,22 @@ class ProductionSecurityConfigurationValidatorTest {
     private static final String VALID_DATABASE_USERNAME = "flare_app";
     private static final String VALID_DATABASE_PASSWORD = "w6Y#pL9rQ2tV5xC8";
     private static final String VALID_REDIS_PASSWORD = "r4N!kP8sW1dF7vZ3";
+    private static final String VALID_MAIL_HOST = "smtp.mailprovider.net";
+    private static final String VALID_MAIL_USERNAME = "mailer@flarefitness.com";
+    private static final String VALID_MAIL_PASSWORD = "s8M!pQ2vL9xC4rT7";
+    private static final String VALID_MAIL_FROM = "Flare Fitness <no-reply@flarefitness.com>";
     private static final String VALID_TRUSTED_PROXY_CIDRS = "127.0.0.1/32,172.30.0.0/24";
+
+    @Test
+    void rejectsFixtureProfilesCombinedWithProduction() {
+        assertThatThrownBy(() -> productionValidatorWithProfiles("prod", "dev").afterPropertiesSet())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("must not be combined");
+
+        assertThatThrownBy(() -> productionValidatorWithProfiles("production", "e2e").afterPropertiesSet())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("must not be combined");
+    }
 
     @Test
     void rejectsInsecureCookieWhenProductionProfileIsActive() {
@@ -114,6 +129,118 @@ class ProductionSecurityConfigurationValidatorTest {
     }
 
     @Test
+    void rejectsMissingProductionMailConfiguration() {
+        assertThatThrownBy(() -> productionValidatorWithMail(
+                "",
+                VALID_MAIL_USERNAME,
+                VALID_MAIL_PASSWORD,
+                VALID_MAIL_FROM
+        ).afterPropertiesSet())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("SPRING_MAIL_HOST");
+
+        assertThatThrownBy(() -> productionValidatorWithMail(
+                VALID_MAIL_HOST,
+                "",
+                VALID_MAIL_PASSWORD,
+                VALID_MAIL_FROM
+        ).afterPropertiesSet())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("APP_MAIL_USERNAME");
+
+        assertThatThrownBy(() -> productionValidatorWithMail(
+                VALID_MAIL_HOST,
+                VALID_MAIL_USERNAME,
+                "",
+                VALID_MAIL_FROM
+        ).afterPropertiesSet())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("APP_MAIL_PASSWORD");
+
+        assertThatThrownBy(() -> productionValidatorWithMail(
+                VALID_MAIL_HOST,
+                VALID_MAIL_USERNAME,
+                VALID_MAIL_PASSWORD,
+                ""
+        ).afterPropertiesSet())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("APP_MAIL_FROM");
+    }
+
+    @Test
+    void rejectsFixtureMailHostAndPlaceholderPasswordWithoutEchoingCredentials() {
+        assertThatThrownBy(() -> productionValidatorWithMail(
+                "mailpit",
+                VALID_MAIL_USERNAME,
+                VALID_MAIL_PASSWORD,
+                VALID_MAIL_FROM
+        ).afterPropertiesSet())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("SPRING_MAIL_HOST")
+                .hasMessageNotContaining("mailpit");
+
+        String placeholderPassword = "change-this-mail-password";
+        assertThatThrownBy(() -> productionValidatorWithMail(
+                VALID_MAIL_HOST,
+                VALID_MAIL_USERNAME,
+                placeholderPassword,
+                VALID_MAIL_FROM
+        ).afterPropertiesSet())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("APP_MAIL_PASSWORD")
+                .hasMessageNotContaining(placeholderPassword);
+    }
+
+    @Test
+    void rejectsLowDiversityServiceSecrets() {
+        assertThatThrownBy(() -> productionValidator(
+                true,
+                VALID_JWT_SECRET,
+                VALID_CORS_ORIGINS,
+                DOCKER_DATASOURCE_URL,
+                VALID_DATABASE_USERNAME,
+                "aaaaaaaaaaaaaaaa",
+                VALID_REDIS_PASSWORD,
+                VALID_TRUSTED_PROXY_CIDRS
+        ).afterPropertiesSet())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("SPRING_DATASOURCE_PASSWORD")
+                .hasMessageNotContaining("aaaaaaaaaaaaaaaa");
+
+        assertThatThrownBy(() -> productionValidatorWithMail(
+                VALID_MAIL_HOST,
+                VALID_MAIL_USERNAME,
+                "aaaaaaaaaaaaaaaa",
+                VALID_MAIL_FROM
+        ).afterPropertiesSet())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("APP_MAIL_PASSWORD")
+                .hasMessageNotContaining("aaaaaaaaaaaaaaaa");
+    }
+
+    @Test
+    void rejectsMailboxGroupsAndInsecureProductionSmtpTransport() {
+        assertThatThrownBy(() -> productionValidatorWithMail(
+                VALID_MAIL_HOST,
+                VALID_MAIL_USERNAME,
+                VALID_MAIL_PASSWORD,
+                "Team: first@flarefitness.com,second@flarefitness.com;"
+        ).afterPropertiesSet())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("APP_MAIL_FROM");
+
+        assertThatThrownBy(() -> productionValidatorWithMailTransport(false, true, true).afterPropertiesSet())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("authentication and STARTTLS");
+        assertThatThrownBy(() -> productionValidatorWithMailTransport(true, false, true).afterPropertiesSet())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("authentication and STARTTLS");
+        assertThatThrownBy(() -> productionValidatorWithMailTransport(true, true, false).afterPropertiesSet())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("authentication and STARTTLS");
+    }
+
+    @Test
     void rejectsTrailingPathInProductionCorsOrigin() {
         assertThatThrownBy(() -> productionValidator(
                 true,
@@ -143,7 +270,7 @@ class ProductionSecurityConfigurationValidatorTest {
     }
 
     @Test
-    void permitsLocalDevelopmentConfiguration() {
+    void permitsNonProductionFixtureConfigurations() {
         MockEnvironment environment = new MockEnvironment();
         environment.setActiveProfiles("dev");
 
@@ -156,6 +283,34 @@ class ProductionSecurityConfigurationValidatorTest {
                 "root",
                 "short",
                 "short",
+                "",
+                "",
+                "",
+                "",
+                false,
+                false,
+                false,
+                ""
+        ).afterPropertiesSet())
+                .doesNotThrowAnyException();
+
+        environment.setActiveProfiles("e2e");
+        assertThatCode(() -> new ProductionSecurityConfigurationValidator(
+                environment,
+                false,
+                "short",
+                "*",
+                "jdbc:mysql://database.example.com:3306/flare_fitness?useSSL=false",
+                "root",
+                "short",
+                "short",
+                "mailpit",
+                "e2e@flarefitness.test",
+                "short",
+                "e2e@flarefitness.test",
+                false,
+                false,
+                false,
                 ""
         ).afterPropertiesSet())
                 .doesNotThrowAnyException();
@@ -200,7 +355,93 @@ class ProductionSecurityConfigurationValidatorTest {
                 datasourceUsername,
                 datasourcePassword,
                 redisPassword,
+                VALID_MAIL_HOST,
+                VALID_MAIL_USERNAME,
+                VALID_MAIL_PASSWORD,
+                VALID_MAIL_FROM,
+                true,
+                true,
+                true,
                 trustedProxyCidrs
+        );
+    }
+
+    private static ProductionSecurityConfigurationValidator productionValidatorWithProfiles(
+            String... activeProfiles) {
+        MockEnvironment environment = new MockEnvironment();
+        environment.setActiveProfiles(activeProfiles);
+        return new ProductionSecurityConfigurationValidator(
+                environment,
+                true,
+                VALID_JWT_SECRET,
+                VALID_CORS_ORIGINS,
+                DOCKER_DATASOURCE_URL,
+                VALID_DATABASE_USERNAME,
+                VALID_DATABASE_PASSWORD,
+                VALID_REDIS_PASSWORD,
+                VALID_MAIL_HOST,
+                VALID_MAIL_USERNAME,
+                VALID_MAIL_PASSWORD,
+                VALID_MAIL_FROM,
+                true,
+                true,
+                true,
+                VALID_TRUSTED_PROXY_CIDRS
+        );
+    }
+
+    private static ProductionSecurityConfigurationValidator productionValidatorWithMail(
+            String mailHost,
+            String mailUsername,
+            String mailPassword,
+            String mailFrom
+    ) {
+        MockEnvironment environment = new MockEnvironment();
+        environment.setActiveProfiles("prod");
+        return new ProductionSecurityConfigurationValidator(
+                environment,
+                true,
+                VALID_JWT_SECRET,
+                VALID_CORS_ORIGINS,
+                DOCKER_DATASOURCE_URL,
+                VALID_DATABASE_USERNAME,
+                VALID_DATABASE_PASSWORD,
+                VALID_REDIS_PASSWORD,
+                mailHost,
+                mailUsername,
+                mailPassword,
+                mailFrom,
+                true,
+                true,
+                true,
+                VALID_TRUSTED_PROXY_CIDRS
+        );
+    }
+
+    private static ProductionSecurityConfigurationValidator productionValidatorWithMailTransport(
+            boolean smtpAuth,
+            boolean startTlsEnabled,
+            boolean startTlsRequired
+    ) {
+        MockEnvironment environment = new MockEnvironment();
+        environment.setActiveProfiles("prod");
+        return new ProductionSecurityConfigurationValidator(
+                environment,
+                true,
+                VALID_JWT_SECRET,
+                VALID_CORS_ORIGINS,
+                DOCKER_DATASOURCE_URL,
+                VALID_DATABASE_USERNAME,
+                VALID_DATABASE_PASSWORD,
+                VALID_REDIS_PASSWORD,
+                VALID_MAIL_HOST,
+                VALID_MAIL_USERNAME,
+                VALID_MAIL_PASSWORD,
+                VALID_MAIL_FROM,
+                smtpAuth,
+                startTlsEnabled,
+                startTlsRequired,
+                VALID_TRUSTED_PROXY_CIDRS
         );
     }
 }

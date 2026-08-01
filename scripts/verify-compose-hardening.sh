@@ -12,6 +12,22 @@ fail() {
   exit 1
 }
 
+assert_contains() {
+  file=$1
+  expected=$2
+  message=$3
+  grep -F -- "$expected" "$file" >/dev/null || fail "$message"
+}
+
+assert_not_contains() {
+  file=$1
+  rejected=$2
+  message=$3
+  if grep -F -- "$rejected" "$file" >/dev/null; then
+    fail "$message"
+  fi
+}
+
 service_block() {
   service_name=$1
   awk -v service_name="$service_name" '
@@ -68,6 +84,85 @@ assert_digest_pins() {
   fi
 }
 
+assert_aws_bind_mount_permissions() {
+  assert_contains nginx/Dockerfile 'USER 101:101' \
+    'Nginx runtime UID/GID must stay explicit for host bind-mount ownership.'
+  assert_contains docker-compose.yml 'chown -R 101:1000 /var/log/nginx' \
+    'Compose must migrate existing Nginx log volumes to the shared Nginx/Filebeat ownership contract.'
+  assert_contains docker-compose.yml 'chmod 2750 /var/log/nginx' \
+    'Compose must keep the Nginx log directory traversable only by Nginx and Filebeat.'
+  assert_contains docker-compose.yml 'nginx-logs-init:' \
+    'Nginx and Filebeat must wait for the Nginx log-volume ownership initializer.'
+  assert_contains docker-compose.yml 'user: "1000:1000"' \
+    'Filebeat UID/GID must stay explicit for shared Nginx-log access.'
+  assert_contains observability/docker-compose.monitor.yml 'user: "1000:0"' \
+    'Elasticsearch UID/GID must stay explicit for host data ownership.'
+  assert_contains observability/docker-compose.monitor.yml '/_node/pipelines/main?pretty=false' \
+    'Logstash must expose a pipeline-aware container healthcheck.'
+  assert_contains terraform/templates/web-cloud-init.yaml.tftpl \
+    'install -d -m 2750 -o 101 -g 1000 /opt/flare/nginx-logs' \
+    'Web cloud-init must create the Nginx log directory for nginx UID 101 and Filebeat GID 1000.'
+  assert_contains terraform/templates/web-cloud-init.yaml.tftpl \
+    'install -m 0640 -o 101 -g 1000 /dev/null /opt/flare/nginx-logs/access.json.log' \
+    'Web cloud-init must pre-create the access log with shared read ownership.'
+  assert_contains observability/logrotate/nginx-access 'create 0640 101 1000' \
+    'Logrotate must create logs writable by nginx UID 101 and readable by Filebeat GID 1000.'
+  assert_contains observability/logrotate/nginx-access 'maxsize 10M' \
+    'Logrotate must retain daily rotation while enforcing the 10 MB upper bound.'
+  assert_not_contains observability/logrotate/nginx-access '    size 10M' \
+    'Logrotate size must not override the daily schedule; use maxsize.'
+  assert_not_contains observability/logrotate/nginx-access "flare-nginx-logrotate 'Failed to signal running nginx after log rotation'; true" \
+    'Logrotate must fail visibly when a running Nginx cannot reopen its log files.'
+
+  web_deploy=$(cat observability/scripts/deploy-web.sh)
+  case "$web_deploy" in
+    *'--exclude nginx-logs --exclude filebeat-data'*'sudo chown -R 101:1000 /opt/flare/nginx-logs'*'sudo chmod 2750 /opt/flare/nginx-logs'*) ;;
+    *) fail 'Web deploy must preserve runtime bind mounts and restore Nginx/Filebeat log ownership after release sync.' ;;
+  esac
+  case "$web_deploy" in
+    *'sudo mv /tmp/flare-web-certs "$certs_next"'*'sudo openssl verify -CAfile "$certs_next/ca.crt"'*'sudo mv "$certs_target" "$certs_previous"'*'sudo mv "$certs_next" "$certs_target"'*'--force-recreate --no-deps filebeat'*'filebeat test output'*) ;;
+    *) fail 'Web deploy must validate and replace the exact Filebeat certificate bundle, recreate Filebeat and test its output.' ;;
+  esac
+
+  monitor_cloud_init=$(cat terraform/templates/monitor-cloud-init.yaml.tftpl)
+  case "$monitor_cloud_init" in
+    *'grep -Fq "UUID=$${uuid} /srv/elastic " /etc/fstab'*'mountpoint -q /srv/elastic || mount /srv/elastic'*'install -d -m 0750 -o 1000 -g 0 /srv/elastic/elasticsearch'*) ;;
+    *) fail 'Monitor cloud-init must create the Elasticsearch bind source as 1000:0 after mounting EBS.' ;;
+  esac
+
+  monitor_deploy=$(cat observability/scripts/deploy-monitor.sh)
+  case "$monitor_deploy" in
+    *'sudo mountpoint -q /srv/elastic'*'sudo install -d -m 0750 -o 1000 -g 0 /srv/elastic/elasticsearch'*) ;;
+    *) fail 'Monitor deploy must verify EBS and create the Elasticsearch bind source as 1000:0.' ;;
+  esac
+  case "$monitor_deploy" in
+    *'up --wait --wait-timeout 300 -d --force-recreate --no-deps logstash'*) ;;
+    *) fail 'Monitor deploy must recreate Logstash and wait for its pipeline health after replacing bind mounts.' ;;
+  esac
+  assert_not_contains observability/scripts/deploy-monitor.sh \
+    'chown -R ubuntu:ubuntu /opt/flare/observability /srv/elastic' \
+    'Monitor deploy must not recursively give Elasticsearch data to the SSH user.'
+}
+
+assert_docker_context_hardening() {
+  for ignore_file in .dockerignore backend/.dockerignore; do
+    assert_contains "$ignore_file" '.secrets/' "$ignore_file must exclude the local secrets tree."
+    assert_contains "$ignore_file" '**/*.key' "$ignore_file must exclude private keys."
+    assert_contains "$ignore_file" '**/*.crt' "$ignore_file must exclude certificates."
+    assert_contains "$ignore_file" '**/.terraform/' "$ignore_file must exclude Terraform working directories."
+    assert_contains "$ignore_file" '**/*.tfstate' "$ignore_file must exclude Terraform state."
+    assert_contains "$ignore_file" '!**/.env.example' "$ignore_file must retain explicit environment examples."
+    assert_contains "$ignore_file" '!**/.env.*.example' "$ignore_file must retain named environment examples."
+    assert_contains "$ignore_file" '!**/*.tfvars.example' "$ignore_file must retain explicit Terraform variable examples."
+    assert_not_contains "$ignore_file" '!**/*.example' \
+      "$ignore_file must not broadly re-include arbitrary example files after secret exclusions."
+  done
+  assert_contains .dockerignore 'observability/runtime/' 'Docker build contexts must exclude observability runtime output.'
+}
+
+assert_aws_bind_mount_permissions
+assert_docker_context_hardening
+
 base_config=$(docker compose --env-file .env.example config)
 dev_config=$(docker compose --env-file .env.example -f docker-compose.yml -f docker-compose.dev.yml config)
 e2e_config=$(docker compose --env-file .env.e2e.example -f docker-compose.yml -f docker-compose.e2e.yml config)
@@ -77,4 +172,4 @@ assert_safe_resolved_compose dev "$dev_config"
 assert_safe_resolved_compose e2e "$e2e_config"
 assert_digest_pins
 
-printf '%s\n' 'Compose hardening checks passed.'
+printf '%s\n' 'Compose, deployment and Docker-context hardening checks passed.'
