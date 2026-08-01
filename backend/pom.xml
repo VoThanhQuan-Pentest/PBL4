@@ -25,6 +25,9 @@
         <jacoco.version>0.8.15</jacoco.version>
         <!-- Fixes CVE-2026-59901 in netty-codec-compression. -->
         <netty.version>4.1.136.Final</netty.version>
+        <!-- Fixes the Tomcat vulnerabilities reported against 10.1.55 by
+             Dependency-Check, including CVE-2026-55956. -->
+        <tomcat.version>10.1.57</tomcat.version>
         <!-- Keeps direct surefire:test invocations valid when JaCoCo's
              prepare-agent execution is not part of the selected lifecycle. -->
         <jacoco.agent.argLine></jacoco.agent.argLine>
