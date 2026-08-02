@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
+ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 RUNTIME_DIR="${ROOT_DIR}/observability/runtime"
 export COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-flare-local-elk}
 export OBSERVABILITY_ROOT_DIR="$ROOT_DIR"
 export FILEBEAT_CERTS_DIR="${ROOT_DIR}/.secrets/observability/web"
+export KIBANA_URL=${KIBANA_URL:-"http://127.0.0.1:${LOCAL_LAB_KIBANA_PORT:-5601}"}
 export OBSERVABILITY_COMPOSE_ENV_FILE="${ROOT_DIR}/.env.e2e.example"
-export OBSERVABILITY_COMPOSE_FILES="${ROOT_DIR}/docker-compose.yml:${ROOT_DIR}/docker-compose.e2e.yml:${ROOT_DIR}/observability/docker-compose.monitor.yml:${ROOT_DIR}/observability/docker-compose.local.yml"
+export OBSERVABILITY_COMPOSE_FILES=${OBSERVABILITY_COMPOSE_FILES:-"${ROOT_DIR}/docker-compose.yml:${ROOT_DIR}/docker-compose.e2e.yml:${ROOT_DIR}/observability/docker-compose.monitor.yml:${ROOT_DIR}/observability/docker-compose.local.yml"}
 compose_args=(--env-file "$OBSERVABILITY_COMPOSE_ENV_FILE" --project-name "$COMPOSE_PROJECT_NAME" --profile observability)
 IFS=: read -r -a compose_files <<<"$OBSERVABILITY_COMPOSE_FILES"
 for file in "${compose_files[@]}"; do compose_args+=(-f "$file"); done
@@ -38,7 +39,7 @@ up() {
   compose build app
   compose build nginx
   compose up --wait --wait-timeout 300 -d db redis mailpit app nginx filebeat
-  printf 'Flare local ELK is ready: Web http://127.0.0.1:%s, Kibana http://127.0.0.1:5601.\n' "${LOCAL_LAB_WEB_PORT:-8088}"
+  printf 'Flare local ELK is ready: Web http://127.0.0.1:%s, Kibana http://127.0.0.1:%s.\n' "${LOCAL_LAB_WEB_PORT:-8088}" "${LOCAL_LAB_KIBANA_PORT:-5601}"
 }
 
 verify() { "${ROOT_DIR}/observability/scripts/verify-local-lab.sh"; }

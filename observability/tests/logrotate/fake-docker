@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+
+: "${FAKE_DOCKER_LOG:?Set FAKE_DOCKER_LOG to an isolated writable path}"
+printf '%s\n' "$*" >>"$FAKE_DOCKER_LOG"
+
+case " $* " in
+  *" ps "*)
+    printf '%s\n' 'isolated-nginx-container'
+    ;;
+  *" kill "*)
+    [ "${FAKE_DOCKER_KILL_FAIL:-no}" != yes ]
+    ;;
+esac

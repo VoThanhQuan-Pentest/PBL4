@@ -6,9 +6,10 @@ set -Eeuo pipefail
 # app credentials, NGINX_PUBLIC_SERVER_NAME=<web-eip>, the exact HTTP CORS
 # origin, and FILEBEAT_LOGSTASH_HOST=10.20.10.20:5044. The generated Web mTLS
 # directory must exist locally but is ignored by Git.
-ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
+ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 : "${WEB_HOST:?Set WEB_HOST, for example ubuntu@203.0.113.10}"
 SSH_OPTIONS=${SSH_OPTIONS:-"-o BatchMode=yes -o StrictHostKeyChecking=accept-new"}
+read -r -a ssh_options <<<"$SSH_OPTIONS"
 CERTS_DIR="${ROOT_DIR}/.secrets/observability/web"
 
 [ -r "${CERTS_DIR}/ca.crt" ] && [ -r "${CERTS_DIR}/filebeat-web.crt" ] && [ -r "${CERTS_DIR}/filebeat-web.key" ] || {
@@ -23,8 +24,8 @@ rsync -az --delete \
   -e "ssh ${SSH_OPTIONS}" "${ROOT_DIR}/" "${WEB_HOST}:/tmp/flare-release/"
 rsync -az --delete -e "ssh ${SSH_OPTIONS}" "${CERTS_DIR}/" "${WEB_HOST}:/tmp/flare-web-certs/"
 
-ssh ${SSH_OPTIONS} "$WEB_HOST" 'test -f /opt/flare/.env || { echo "Create /opt/flare/.env from .env.aws.example first" >&2; exit 1; }'
-ssh ${SSH_OPTIONS} "$WEB_HOST" '
+ssh "${ssh_options[@]}" "$WEB_HOST" 'test -f /opt/flare/.env || { echo "Create /opt/flare/.env from .env.aws.example first" >&2; exit 1; }'
+ssh "${ssh_options[@]}" "$WEB_HOST" '
   set -eu
   certs_parent=/opt/flare/.secrets/observability
   certs_target=${certs_parent}/web
@@ -86,13 +87,14 @@ ssh ${SSH_OPTIONS} "$WEB_HOST" '
   sudo chmod 0700 /opt/flare/.secrets "$certs_parent" "$certs_target"
   sudo chmod 0600 "$certs_target"/*.key
 '
-ssh ${SSH_OPTIONS} "$WEB_HOST" '
+ssh "${ssh_options[@]}" "$WEB_HOST" '
   set -eu
   cd /opt/flare
   certs_parent=/opt/flare/.secrets/observability
   certs_target=${certs_parent}/web
   certs_previous=${certs_parent}/web.previous
   certs_failed=${certs_parent}/web.failed
+  logrotate_candidate=/etc/logrotate.d/.flare-nginx.next.$$
   rotation_complete=0
   compose() {
     docker compose -f docker-compose.yml -f observability/docker-compose.web-aws.yml "$@"
@@ -100,6 +102,7 @@ ssh ${SSH_OPTIONS} "$WEB_HOST" '
   rollback_certificate_bundle() {
     status=$?
     trap - EXIT
+    sudo rm -f "$logrotate_candidate"
     if [ "$rotation_complete" -ne 1 ] && sudo test -e "$certs_previous"; then
       echo "Deployment failed; restoring the previous Filebeat certificate bundle." >&2
       if sudo mv "$certs_target" "$certs_failed" && sudo mv "$certs_previous" "$certs_target"; then
@@ -116,17 +119,29 @@ ssh ${SSH_OPTIONS} "$WEB_HOST" '
   }
   trap rollback_certificate_bundle EXIT
 
-  sudo cp observability/logrotate/nginx-access /etc/logrotate.d/flare-nginx
+  # Parse a root-owned candidate with the target host package. Keep the active
+  # policy unchanged until the complete Web stack and Filebeat output pass.
+  sudo install -m 0644 -o root -g root observability/logrotate/nginx-access "$logrotate_candidate"
+  sudo logrotate --debug --state /dev/null "$logrotate_candidate" >/dev/null
+  if ! COMPOSE_PROJECT_NAME=flare observability/scripts/migrate-redis-volume.sh check; then
+    echo "Redis still uses a legacy anonymous volume. Run the gated migration, then rerun this deployment:" >&2
+    echo "  cd /opt/flare && COMPOSE_PROJECT_NAME=flare REDIS_VOLUME_MIGRATION_CONFIRM=yes observability/scripts/migrate-redis-volume.sh prepare" >&2
+    exit 1
+  fi
   compose build app
   compose build nginx
-  compose --profile observability up -d
+  compose --profile observability up --wait --wait-timeout 300 -d
 
   # Compose does not recreate a container when only the contents behind its
   # file bind mounts change. Force recreation so Filebeat opens the new cert
   # inodes, then prove that the new bundle can reach the Logstash output.
   compose --profile observability up -d --force-recreate --no-deps filebeat
   compose exec -T filebeat filebeat test output --strict.perms=false --path.data /tmp/filebeat-output-test
+  if test -f observability/runtime/redis-migration/state.json; then
+    COMPOSE_PROJECT_NAME=flare observability/scripts/migrate-redis-volume.sh verify
+  fi
 
+  sudo mv "$logrotate_candidate" /etc/logrotate.d/flare-nginx
   sudo rm -rf "$certs_previous"
   rotation_complete=1
   trap - EXIT

@@ -70,6 +70,11 @@ backup state được mã hóa ngoài Git. Sau khi chấm, export evidence, ch�
 4. `WEB_HOST=ubuntu@<web-eip> ./observability/scripts/deploy-web.sh`.
 5. `ssh -L 5601:127.0.0.1:5601 ubuntu@<monitor-eip>` rồi mở Kibana local.
 
+Nếu Web host cũ còn dùng Redis volume legacy, bước 4 dừng an toàn trước khi
+recreate Redis. Chạy lệnh migration có confirmation mà script in ra, xác nhận
+`verify` thành công rồi chạy lại deploy. Migration giữ cả source và rollback
+volume; không dùng `down -v` trong quá trình này.
+
 Rollback bằng cấu hình/image trước đó và `docker compose up -d`; không dùng
 `down -v` vì sẽ xóa queue/data.
 

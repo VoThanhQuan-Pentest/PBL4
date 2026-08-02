@@ -2,6 +2,10 @@
 # development; this override makes Nginx logs host-visible for rename/create
 # logrotate and keeps Filebeat's registry/certificates outside named volumes.
 services:
+  nginx-logs-init:
+    volumes:
+      - /opt/flare/nginx-logs:/var/log/nginx
+
   nginx:
     volumes:
       - /opt/flare/nginx-logs:/var/log/nginx

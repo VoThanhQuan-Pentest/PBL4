@@ -1,20 +1,22 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
+ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 SOURCE="${ROOT_DIR}/observability/runtime/verification.json"
 DEST="${ROOT_DIR}/docs/evidence/local-elk"
 ANALYST_PASSWORD_FILE="${ROOT_DIR}/.secrets/observability/monitor/analyst.password"
 PLAYWRIGHT_IMAGE='mcr.microsoft.com/playwright:v1.61.1-noble@sha256:cf0daee9b994042e011bc29f20cdff1a9f682a039b43fcd738f7d8a9d3bcd9d6'
 
-[ -r "$SOURCE" ] && jq -e '.passed==true and .synthetic_data_only==true' "$SOURCE" >/dev/null || {
+if ! { [ -r "$SOURCE" ] && jq -e '.passed==true and .synthetic_data_only==true' "$SOURCE" >/dev/null; }; then
   printf 'Run local-lab.sh verify successfully before creating evidence.\n' >&2
   exit 1
-}
+fi
 [ -r "$ANALYST_PASSWORD_FILE" ] || { printf 'Missing analyst password file.\n' >&2; exit 1; }
 install -d -m 0755 "$DEST"
 install -m 0644 "$SOURCE" "${DEST}/verification.json"
 
+# Backticks below are literal Markdown, not shell substitutions.
+# shellcheck disable=SC2016
 {
   printf '# Flare local ELK verification\n\n'
   printf -- '- Elastic Stack: `9.4.2`\n'
@@ -30,7 +32,8 @@ install -m 0644 "$SOURCE" "${DEST}/verification.json"
 } >"${DEST}/verification.md"
 
 docker run --rm --network host --user "$(id -u):$(id -g)" \
-  -e HOME=/tmp/home -v "${ROOT_DIR}:/workspace:ro" -v "${DEST}:/evidence" \
+  -e HOME=/tmp/home -e KIBANA_URL="${KIBANA_URL:-http://127.0.0.1:${LOCAL_LAB_KIBANA_PORT:-5601}}" \
+  -v "${ROOT_DIR}:/workspace:ro" -v "${DEST}:/evidence" \
   -v "${ANALYST_PASSWORD_FILE}:/run/flare-secrets/analyst.password:ro" \
   "$PLAYWRIGHT_IMAGE" bash -ceu '
     install -d /tmp/home /tmp/runner

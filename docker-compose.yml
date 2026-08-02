@@ -80,13 +80,18 @@ services:
       retries: 10
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+    volumes:
+      - redis-data:/data
     networks:
       - flare-internal
     restart: unless-stopped
 
   nginx-logs-init:
     image: nginx:stable-alpine@sha256:ec664813a30459a8e7176315268a623f6b31abc370eeac51c7de81cd4ec4d451
-    user: "0:0"
+    # UID 0 retains only CHOWN/FOWNER. GID 1000 gives the initializer read and
+    # traverse access after a previous run has secured the directory as
+    # 101:1000/2750, so repeated Compose starts do not need DAC_OVERRIDE.
+    user: "0:1000"
     entrypoint: ["sh", "-c"]
     command:
       - >-
@@ -186,6 +191,7 @@ services:
 
 volumes:
   mysql-data:
+  redis-data:
   nginx-logs:
   filebeat-data:
 

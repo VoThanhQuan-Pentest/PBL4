@@ -7,10 +7,13 @@
     compress
     delaycompress
     dateext
-    # nginx is 101:101; Filebeat reads through its fixed GID 1000.
-    create 0640 101 1000
+    # Host account databases do not necessarily contain the container-only
+    # UID/GID. Create with host-resolvable identities, then apply the numeric
+    # container ownership before asking nginx to reopen the files.
+    create 0640 root root
     sharedscripts
     postrotate
+        /usr/bin/chown 101:1000 /opt/flare/nginx-logs/*.log && /usr/bin/chmod 0640 /opt/flare/nginx-logs/*.log || { /usr/bin/logger -p daemon.err -t flare-nginx-logrotate 'Failed to set nginx log ownership after rotation'; exit 1; }
         if /usr/bin/docker compose --project-name flare --project-directory /opt/flare ps --status running --quiet nginx 2>/dev/null | /usr/bin/grep -q .; then
             /usr/bin/docker compose --project-name flare --project-directory /opt/flare kill -s USR1 nginx >/dev/null 2>&1 || { /usr/bin/logger -p daemon.err -t flare-nginx-logrotate 'Failed to signal running nginx after log rotation'; exit 1; }
         fi

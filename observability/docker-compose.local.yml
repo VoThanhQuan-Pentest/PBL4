@@ -23,7 +23,7 @@ services:
 
   kibana:
     ports: !override
-      - "127.0.0.1:5601:5601"
+      - "127.0.0.1:${LOCAL_LAB_KIBANA_PORT:-5601}:5601"
 
   nginx:
     ports: !override

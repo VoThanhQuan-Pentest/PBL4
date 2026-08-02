@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
+ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 RUNTIME_DIR="${ROOT_DIR}/observability/runtime"
 RESULT_FILE="${RUNTIME_DIR}/verification.json"
 WEB_URL=${FLARE_LAB_TARGET:-"http://127.0.0.1:${LOCAL_LAB_WEB_PORT:-8088}"}
+KIBANA_URL=${KIBANA_URL:-"http://127.0.0.1:${LOCAL_LAB_KIBANA_PORT:-5601}"}
 export OBSERVABILITY_ROOT_DIR="$ROOT_DIR"
 export FILEBEAT_CERTS_DIR="${ROOT_DIR}/.secrets/observability/web"
 compose_args=(--env-file "${ROOT_DIR}/.env.e2e.example" --project-name "${COMPOSE_PROJECT_NAME:-flare-local-elk}" --profile observability
@@ -25,6 +26,8 @@ pass() { record "$1" true "$2"; printf 'PASS: %s\n' "$1"; }
 
 elastic_api() {
   local method=$1 endpoint=$2
+  # Password expansion belongs to the Elasticsearch container.
+  # shellcheck disable=SC2016
   compose exec -T elasticsearch bash -ceu '
     password=$(cat /run/flare-secrets/elasticsearch.password)
     args=(--fail --silent --show-error --cacert /usr/share/elasticsearch/config/certs/ca.crt --user "elastic:${password}" -X "$1")
@@ -171,7 +174,7 @@ role=$(elastic_api GET '/_security/role/flare_analyst' </dev/null)
 printf '%s' "$role" | jq -e '.flare_analyst.cluster==[] and ([.flare_analyst.indices[].privileges[]]|all(.=="read" or .=="view_index_metadata")) and ([.flare_analyst.applications[].privileges[]]|all(endswith(".read")))' >/dev/null || fail analyst_role 'role contains a write, management or non-read application privilege'
 analyst_password=$(<"${ROOT_DIR}/.secrets/observability/monitor/analyst.password")
 for dashboard in flare-overview flare-geoip flare-security; do
-  code=$(curl --silent --output /dev/null --write-out '%{http_code}' --config <(printf 'user = "flare_analyst:%s"\n' "$analyst_password") "http://127.0.0.1:5601/s/flare-lab/api/saved_objects/dashboard/${dashboard}")
+  code=$(curl --silent --output /dev/null --write-out '%{http_code}' --config <(printf 'user = "flare_analyst:%s"\n' "$analyst_password") "${KIBANA_URL}/s/flare-lab/api/saved_objects/dashboard/${dashboard}")
   [ "$code" = 200 ] || fail analyst_role "analyst cannot read ${dashboard} (HTTP ${code})"
 done
 pass analyst_role 'analyst can read all dashboards; role exposes only read privileges'
