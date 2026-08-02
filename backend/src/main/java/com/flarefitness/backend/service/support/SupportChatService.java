@@ -29,6 +29,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -414,14 +415,14 @@ public class SupportChatService {
     private void assertCustomerUser(User user) {
         if (CurrentUserPrincipal.toAuthority(user.getRole()).equals("ROLE_ADMIN")
                 || CurrentUserPrincipal.toAuthority(user.getRole()).equals("ROLE_STAFF")) {
-            throw new UnauthorizedException("Tai khoan nhan vien va quan tri vien khong su dung kenh ho tro khach hang.");
+            throw new AccessDeniedException("Tai khoan nhan vien va quan tri vien khong su dung kenh ho tro khach hang.");
         }
     }
 
     private void assertWorkspaceUser(User user) {
         String authority = CurrentUserPrincipal.toAuthority(user.getRole());
         if (!authority.equals("ROLE_ADMIN") && !authority.equals("ROLE_STAFF")) {
-            throw new UnauthorizedException("Ban khong co quyen xem ho tro khach hang.");
+            throw new AccessDeniedException("Ban khong co quyen xem ho tro khach hang.");
         }
     }
 }

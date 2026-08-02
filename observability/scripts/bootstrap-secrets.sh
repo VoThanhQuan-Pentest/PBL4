@@ -47,6 +47,39 @@ secure_filebeat_key() {
     -c 'chown 1000:1000 /filebeat-web.key && chmod 0600 /filebeat-web.key'
 }
 
+secure_monitor_runtime_secrets() {
+  # Keep the host runner as owner so setup scripts can still read these files,
+  # while granting only the pinned containers' runtime groups read access.
+  # Elasticsearch runs as 1000:0; Logstash and Kibana run with group 1000.
+  docker run --rm --network none --read-only --cap-drop ALL \
+    --cap-add CHOWN --cap-add FOWNER --user 0:0 \
+    -v "${MONITOR_DIR}/elasticsearch.password:/elasticsearch.password" \
+    -v "${MONITOR_DIR}/elasticsearch.key:/elasticsearch.key" \
+    -v "${MONITOR_DIR}/logstash.key:/logstash.key" \
+    -v "${MONITOR_DIR}/logstash.keystore:/logstash.keystore" \
+    -v "${MONITOR_DIR}/kibana.keystore:/kibana.keystore" \
+    --entrypoint sh "$FILEBEAT_IMAGE" -ceu '
+      chgrp 0 /elasticsearch.password /elasticsearch.key
+      chgrp 1000 /logstash.key /logstash.keystore /kibana.keystore
+      chmod 0640 /elasticsearch.password /elasticsearch.key \
+        /logstash.key /logstash.keystore /kibana.keystore
+    '
+
+  # Exercise the actual non-owner group-read path used on GitHub-hosted
+  # runners instead of accepting a mode/ownership check alone.
+  docker run --rm --network none --read-only --cap-drop ALL --user 65534:0 \
+    -v "${MONITOR_DIR}/elasticsearch.password:/elasticsearch.password:ro" \
+    -v "${MONITOR_DIR}/elasticsearch.key:/elasticsearch.key:ro" \
+    --entrypoint sh "$FILEBEAT_IMAGE" \
+    -ceu 'test -r /elasticsearch.password && test -r /elasticsearch.key'
+  docker run --rm --network none --read-only --cap-drop ALL --user 65534:1000 \
+    -v "${MONITOR_DIR}/logstash.key:/logstash.key:ro" \
+    -v "${MONITOR_DIR}/logstash.keystore:/logstash.keystore:ro" \
+    -v "${MONITOR_DIR}/kibana.keystore:/kibana.keystore:ro" \
+    --entrypoint sh "$FILEBEAT_IMAGE" \
+    -ceu 'test -r /logstash.key && test -r /logstash.keystore && test -r /kibana.keystore'
+}
+
 existing=0
 for path in "${required_files[@]}"; do
   [ ! -e "$path" ] || existing=$((existing + 1))
@@ -55,6 +88,7 @@ if [ "$existing" -eq "${#required_files[@]}" ]; then
   chmod 0700 "$SECRETS_DIR" "$MONITOR_DIR" "$WEB_DIR"
   chmod 0600 "${MONITOR_DIR}"/*.password "${MONITOR_DIR}"/*.key \
     "${MONITOR_DIR}"/*.keystore
+  secure_monitor_runtime_secrets
   secure_filebeat_key
   printf 'Observability secrets already exist and were left unchanged in %s.\n' "$SECRETS_DIR"
   exit 0
@@ -173,6 +207,7 @@ create_logstash_keystore() {
 
 create_kibana_keystore
 create_logstash_keystore
+secure_monitor_runtime_secrets
 
 printf 'Generated observability PKI, password files and product keystores under %s.\n' "$SECRETS_DIR"
 printf 'Copy only %s to Web; never copy the CA key or Monitor password files.\n' "$WEB_DIR"

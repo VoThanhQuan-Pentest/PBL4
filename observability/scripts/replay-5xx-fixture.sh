@@ -2,10 +2,11 @@
 set -Eeuo pipefail
 
 [ "${LOCAL_FIXTURE_CONFIRM:-}" = "yes" ] || { printf 'Set LOCAL_FIXTURE_CONFIRM=yes to write synthetic local events.\n' >&2; exit 1; }
-ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
+ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 export OBSERVABILITY_ROOT_DIR="$ROOT_DIR"
 export FILEBEAT_CERTS_DIR="${ROOT_DIR}/.secrets/observability/web"
-args=(--env-file "${ROOT_DIR}/.env.e2e.example" --project-name flare-local-elk --profile observability
+compose_project=${COMPOSE_PROJECT_NAME:-flare-local-elk}
+args=(--env-file "${ROOT_DIR}/.env.e2e.example" --project-name "$compose_project" --profile observability
   -f "${ROOT_DIR}/docker-compose.yml" -f "${ROOT_DIR}/docker-compose.e2e.yml"
   -f "${ROOT_DIR}/observability/docker-compose.monitor.yml" -f "${ROOT_DIR}/observability/docker-compose.local.yml")
 

@@ -88,25 +88,70 @@ jobs:
   dependency-audit:
     name: Maven dependency audit
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      TRUSTED_NVD_AUDIT: ${{ (github.event_name == 'push' && github.actor != 'dependabot[bot]') || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') }}
     defaults:
       run:
         working-directory: backend
     steps:
+      - name: Explain the untrusted pull-request audit policy
+        if: env.TRUSTED_NVD_AUDIT != 'true'
+        working-directory: ${{ github.workspace }}
+        run: >-
+          echo "::notice title=NVD audit deferred::Fork and Dependabot-triggered workflows do not receive repository Actions secrets. Dependency review still runs where available; the keyed NVD audit runs after a trusted non-Dependabot push or through workflow_dispatch."
       - name: Check out source
+        if: env.TRUSTED_NVD_AUDIT == 'true'
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Set up Java
+        if: env.TRUSTED_NVD_AUDIT == 'true'
         uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
         with:
           distribution: temurin
           java-version: '21'
           cache: maven
+      - name: Build the daily Dependency-Check cache key
+        if: env.TRUSTED_NVD_AUDIT == 'true'
+        id: dependency-check-cache-key
+        run: echo "day=$(/bin/date -u +%F)" >> "$GITHUB_OUTPUT"
+      - name: Restore the Dependency-Check vulnerability database
+        if: env.TRUSTED_NVD_AUDIT == 'true'
+        id: dependency-check-cache
+        uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: ${{ runner.temp }}/dependency-check-data
+          key: ${{ runner.os }}-dependency-check-v12-${{ hashFiles('backend/pom.xml') }}-${{ steps.dependency-check-cache-key.outputs.day }}
+          restore-keys: |
+            ${{ runner.os }}-dependency-check-v12-${{ hashFiles('backend/pom.xml') }}-
+            ${{ runner.os }}-dependency-check-v12-
+      - name: Update the Dependency-Check vulnerability database
+        if: env.TRUSTED_NVD_AUDIT == 'true'
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+        run: >-
+          test -n "$NVD_API_KEY" ||
+          { echo "::error title=Missing NVD API key::Add an NVD_API_KEY repository secret so Dependency-Check can update without exceeding NVD rate limits."; exit 1; };
+          mvn -B -ntp org.owasp:dependency-check-maven:12.2.2:update-only
+          -DnvdApiKeyEnvironmentVariable=NVD_API_KEY
+          -DdataDirectory=${{ runner.temp }}/dependency-check-data
+          -DnvdValidForHours=24
+      - name: Save the updated Dependency-Check vulnerability database
+        if: env.TRUSTED_NVD_AUDIT == 'true' && steps.dependency-check-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: ${{ runner.temp }}/dependency-check-data
+          key: ${{ runner.os }}-dependency-check-v12-${{ hashFiles('backend/pom.xml') }}-${{ steps.dependency-check-cache-key.outputs.day }}
       - name: Scan Maven dependencies for CVEs
+        if: env.TRUSTED_NVD_AUDIT == 'true'
         run: >-
           mvn -B -ntp org.owasp:dependency-check-maven:12.2.2:check
+          -DautoUpdate=false
+          -DdataDirectory=${{ runner.temp }}/dependency-check-data
           -DfailBuildOnCVSS=7
-          -Dformat=HTML,JSON
+          -Dformats=HTML,JSON
+          -DsuppressionFile=dependency-check-suppression.xml
       - name: Upload dependency audit report
-        if: always()
+        if: always() && env.TRUSTED_NVD_AUDIT == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: dependency-check-report
@@ -122,6 +167,14 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Validate Compose interpolation
         run: sh scripts/verify-compose-hardening.sh
+      - name: Exercise Docker ownership and logrotate regressions
+        env:
+          RUNTIME_REGRESSION_PROJECT_NAME: pbl4-regression-${{ github.run_id }}-${{ github.run_attempt }}
+        run: bash scripts/verify-docker-runtime-regressions.sh
+      - name: Exercise Redis volume migration and rollback
+        env:
+          REDIS_MIGRATION_TEST_PROJECT_NAME: pbl4-redis-migration-${{ github.run_id }}-${{ github.run_attempt }}
+        run: bash scripts/verify-redis-volume-migration.sh
       - name: Validate Nginx runtime configuration
         run: |
           docker build --tag flare-nginx-config-test --file nginx/Dockerfile .
@@ -132,11 +185,29 @@ jobs:
   observability-config:
     name: Observability configuration
     runs-on: ubuntu-24.04
+    env:
+      COMPOSE_PROJECT_NAME: pbl4-observability-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Check out source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Generate ephemeral PKI and product keystores
         run: observability/scripts/bootstrap-secrets.sh
+      - name: Lint observability shell entrypoints
+        run: >-
+          docker run --rm --network none --entrypoint shellcheck
+          -v "$GITHUB_WORKSPACE:/mnt:ro" -w /mnt
+          koalaman/shellcheck-alpine:stable@sha256:c82fe42504fbc9fc68f15d36638e5ee2324ebb8b94e96a3c4e395bf361c49183
+          observability/scripts/replay-5xx-fixture.sh
+          observability/scripts/validate-config.sh
+          observability/scripts/deploy-web.sh
+          observability/scripts/local-lab.sh
+          observability/scripts/migrate-redis-volume.sh
+          observability/scripts/verify-local-lab.sh
+          observability/scripts/verify-logrotate-continuity.sh
+          observability/scripts/verify-stack-recovery.sh
+          observability/scripts/create-evidence.sh
+          scripts/verify-docker-runtime-regressions.sh
+          scripts/verify-redis-volume-migration.sh
       - name: Validate Compose, Filebeat, Logstash, JSON and saved objects
         run: observability/scripts/validate-config.sh
       - name: Remove ephemeral secrets
@@ -176,7 +247,7 @@ jobs:
     needs: backend
     runs-on: ubuntu-24.04
     env:
-      COMPOSE_PROJECT_NAME: flare-e2e
+      COMPOSE_PROJECT_NAME: pbl4-e2e-${{ github.run_id }}-${{ github.run_attempt }}
       E2E_BASE_URL: http://127.0.0.1:8088
     steps:
       - name: Check out source
@@ -193,6 +264,10 @@ jobs:
       - name: Install the version-matched Playwright Chromium runtime
         working-directory: frontend
         run: npx playwright install --with-deps chromium
+      - name: Prove the Nginx log initializer is repeatable
+        run: |
+          docker compose --env-file .env.e2e.example -f docker-compose.yml -f docker-compose.e2e.yml up --no-deps --force-recreate nginx-logs-init
+          docker compose --env-file .env.e2e.example -f docker-compose.yml -f docker-compose.e2e.yml up --no-deps --force-recreate nginx-logs-init
       - name: Start isolated E2E stack
         run: >-
           docker compose --env-file .env.e2e.example

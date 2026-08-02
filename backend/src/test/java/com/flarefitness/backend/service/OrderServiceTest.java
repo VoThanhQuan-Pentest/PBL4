@@ -43,6 +43,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.Pageable;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 
@@ -586,7 +587,7 @@ class OrderServiceTest {
                 statusRequest(null),
                 staffAuthentication
         ))
-                .isInstanceOf(UnauthorizedException.class)
+                .isInstanceOf(AccessDeniedException.class)
                 .hasMessageContaining("Nhan vien va quan tri vien");
 
         verify(orderRepository, never()).findByIdForUpdate(any());
@@ -599,10 +600,36 @@ class OrderServiceTest {
                 statusRequest("\u0110ang chu\u1ea9n b\u1ecb"),
                 customerAuthentication
         ))
-                .isInstanceOf(UnauthorizedException.class)
+                .isInstanceOf(AccessDeniedException.class)
                 .hasMessageContaining("Chi nhan vien va quan tri vien");
 
         verify(orderRepository, never()).findByIdForUpdate(any());
+    }
+
+    @Test
+    void requestCancellationRejectsOrderOwnedByAnotherCustomer() {
+        Order order = order("order-1", "Ch\u1edd x\u00e1c nh\u1eadn", null);
+        order.setUserId("user-2");
+        order.setCustomerId("customer-2");
+        when(orderRepository.findByIdForUpdate(order.getId())).thenReturn(Optional.of(order));
+        when(customerRepository.findUniqueActiveByUserId("user-1")).thenReturn(Optional.of(customer));
+
+        assertThatThrownBy(() -> orderService.requestCancellation(
+                order.getId(),
+                statusRequest(null),
+                customerAuthentication
+        ))
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessageContaining("khong co quyen");
+
+        verify(orderRepository, never()).save(any(Order.class));
+    }
+
+    @Test
+    void missingAuthenticationRemainsUnauthorized() {
+        assertThatThrownBy(() -> orderService.getCurrentCustomerOrders(null))
+                .isInstanceOf(UnauthorizedException.class)
+                .hasMessageContaining("Phien dang nhap");
     }
 
     private void mockCustomerLookup() {

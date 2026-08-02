@@ -15,6 +15,7 @@ import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -24,6 +25,11 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(ResourceNotFoundException.class)
     public ResponseEntity<ApiErrorResponse> handleNotFound(ResourceNotFoundException exception) {
         return build(HttpStatus.NOT_FOUND, "RESOURCE_NOT_FOUND", exception.getMessage());
+    }
+
+    @ExceptionHandler(ResourceGoneException.class)
+    public ResponseEntity<ApiErrorResponse> handleGone(ResourceGoneException exception) {
+        return build(HttpStatus.GONE, "RESOURCE_GONE", exception.getMessage());
     }
 
     @ExceptionHandler(BadRequestException.class)
@@ -61,6 +67,12 @@ public class GlobalExceptionHandler {
         return build(HttpStatus.BAD_REQUEST, "MALFORMED_REQUEST", "Du lieu gui len khong hop le.");
     }
 
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ApiErrorResponse> handleArgumentTypeMismatch(
+            MethodArgumentTypeMismatchException exception) {
+        return build(HttpStatus.BAD_REQUEST, "INVALID_PARAMETER", "Tham so API khong hop le.");
+    }
+
     @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
     public ResponseEntity<ApiErrorResponse> handleMethodNotSupported(HttpRequestMethodNotSupportedException exception) {
         return build(HttpStatus.METHOD_NOT_ALLOWED, "METHOD_NOT_ALLOWED", "Phuong thuc API khong duoc ho tro.");
@@ -68,7 +80,10 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ResponseEntity<ApiErrorResponse> handleDataIntegrity(DataIntegrityViolationException exception) {
-        LOGGER.error("Database constraint error", exception);
+        LOGGER.warn(
+                "Database constraint rejected the request; causeType={} traceId={}",
+                mostSpecificCauseType(exception),
+                currentTraceId());
         return build(HttpStatus.BAD_REQUEST, "DATA_CONSTRAINT_VIOLATION", "Du lieu khong hop le voi rang buoc database.");
     }
 
@@ -83,7 +98,7 @@ public class GlobalExceptionHandler {
     }
 
     private ResponseEntity<ApiErrorResponse> build(HttpStatus status, String code, String message) {
-        String traceId = MDC.get("traceId");
+        String traceId = currentTraceId();
         return ResponseEntity.status(status)
                 .body(new ApiErrorResponse(
                         OffsetDateTime.now(),
@@ -91,6 +106,16 @@ public class GlobalExceptionHandler {
                         status.getReasonPhrase(),
                         message,
                         code,
-                        traceId == null ? "" : traceId));
+                        traceId));
+    }
+
+    private static String currentTraceId() {
+        String traceId = MDC.get("traceId");
+        return traceId == null ? "" : traceId;
+    }
+
+    private static String mostSpecificCauseType(DataIntegrityViolationException exception) {
+        Throwable cause = exception.getMostSpecificCause();
+        return cause.getClass().getSimpleName();
     }
 }

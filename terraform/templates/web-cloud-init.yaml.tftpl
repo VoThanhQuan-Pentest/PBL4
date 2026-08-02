@@ -32,7 +32,12 @@ runcmd:
   - systemctl enable --now docker
   - systemctl restart ssh
   - usermod -aG docker ubuntu
-  - install -d -m 0750 -o ubuntu -g ubuntu /opt/flare /opt/flare/nginx-logs
+  - install -d -m 0750 -o ubuntu -g ubuntu /opt/flare
+  # nginx:stable-alpine runs as 101:101; Filebeat runs as 1000:1000.
+  # The setgid directory keeps new logs in Filebeat's readable group.
+  - install -d -m 2750 -o 101 -g 1000 /opt/flare/nginx-logs
+  - install -m 0640 -o 101 -g 1000 /dev/null /opt/flare/nginx-logs/access.json.log
+  - install -m 0640 -o 101 -g 1000 /dev/null /opt/flare/nginx-logs/error.log
   - ufw --force reset
   - ufw default deny incoming
   - ufw default allow outgoing

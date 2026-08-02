@@ -34,11 +34,12 @@ class FlywayUpgradeIntegrationTest {
             Flyway versionTenFlyway = flyway(mysql, "10");
             versionTenFlyway.migrate();
             seedVersionTenVoucherRedemption(mysql);
+            seedLegacyManagedReviewSyncState(mysql);
 
             Flyway latestFlyway = flyway(mysql, null);
             latestFlyway.migrate();
 
-            assertThat(latestFlyway.info().current().getVersion().getVersion()).isEqualTo("11");
+            assertThat(latestFlyway.info().current().getVersion().getVersion()).isEqualTo("12");
             try (Connection connection = connection(mysql)) {
                 assertThat(readString(connection,
                         "SELECT ten_san_pham FROM tbl_san_pham WHERE sku = 'WC-001'"))
@@ -71,6 +72,13 @@ class FlywayUpgradeIntegrationTest {
                 assertThat(readString(connection,
                         "SELECT order_id FROM tbl_su_dung_ma_giam_gia WHERE id = 'legacy-redemption'"))
                         .isNull();
+                assertThat(readCount(connection,
+                        "SELECT COUNT(*) FROM tbl_sync_state "
+                                + "WHERE scope = 'APP' AND owner_id IS NULL AND state_key = 'managed-reviews'"))
+                        .isZero();
+                assertThat(readCount(connection,
+                        "SELECT COUNT(*) FROM tbl_sync_state WHERE id = 'preserved-managed-reviews'"))
+                        .isEqualTo(1);
             }
             assertThat(latestFlyway.migrate().migrationsExecuted).isZero();
         } finally {
@@ -201,6 +209,19 @@ class FlywayUpgradeIntegrationTest {
         }
     }
 
+    private void seedLegacyManagedReviewSyncState(MySQLContainer<?> mysql) throws Exception {
+        try (Connection connection = connection(mysql);
+                PreparedStatement statement = connection.prepareStatement("""
+                        INSERT INTO tbl_sync_state
+                            (id, scope, owner_id, state_key, payload, ngay_cap_nhat)
+                        VALUES
+                            ('legacy-managed-reviews', 'APP', NULL, 'managed-reviews', '[]', CURRENT_TIMESTAMP),
+                            ('preserved-managed-reviews', 'USER', 'legacy-user', 'managed-reviews', '[]', CURRENT_TIMESTAMP)
+                        """)) {
+            statement.executeUpdate();
+        }
+    }
+
     private Connection connection(MySQLContainer<?> mysql) throws Exception {
         return DriverManager.getConnection(mysql.getJdbcUrl(), mysql.getUsername(), mysql.getPassword());
     }
@@ -210,6 +231,14 @@ class FlywayUpgradeIntegrationTest {
                 ResultSet result = statement.executeQuery()) {
             assertThat(result.next()).isTrue();
             return result.getString(1);
+        }
+    }
+
+    private long readCount(Connection connection, String sql) throws Exception {
+        try (PreparedStatement statement = connection.prepareStatement(sql);
+                ResultSet result = statement.executeQuery()) {
+            assertThat(result.next()).isTrue();
+            return result.getLong(1);
         }
     }
 }

@@ -3,6 +3,7 @@ import { chromium } from '@playwright/test';
 
 const password = (await readFile('/run/flare-secrets/analyst.password', 'utf8')).trim();
 const authorization = `Basic ${Buffer.from(`flare_analyst:${password}`).toString('base64')}`;
+const kibanaUrl = process.env.KIBANA_URL || 'http://127.0.0.1:5601';
 const browser = await chromium.launch({ headless: true });
 const context = await browser.newContext({
   viewport: { width: 1440, height: 900 },
@@ -20,7 +21,7 @@ for (const [id, filename, expectedPanels] of [
   ['flare-geoip', 'geoip.png', 4],
   ['flare-security', 'security.png', 6],
 ]) {
-  const url = `http://127.0.0.1:5601/s/flare-lab/app/dashboards#/view/${id}?_g=(refreshInterval:(pause:!t,value:60000),time:(from:now-24h,to:now))`;
+  const url = `${kibanaUrl}/s/flare-lab/app/dashboards#/view/${id}?_g=(refreshInterval:(pause:!t,value:60000),time:(from:now-24h,to:now))`;
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 120_000 });
   try {
     await page.locator([

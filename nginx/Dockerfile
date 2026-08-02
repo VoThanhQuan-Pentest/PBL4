@@ -24,4 +24,6 @@ RUN chmod 0555 /docker-entrypoint.d/10-validate-trusted-proxy-cidr.sh \
     && chown -R nginx:nginx /etc/nginx/conf.d /var/cache/nginx /var/log/nginx \
     && chown nginx:nginx /var/run/nginx.pid
 
-USER nginx
+# The pinned Alpine image defines nginx as UID/GID 101. Keep the runtime
+# identity numeric because AWS bind-mount ownership is necessarily numeric.
+USER 101:101

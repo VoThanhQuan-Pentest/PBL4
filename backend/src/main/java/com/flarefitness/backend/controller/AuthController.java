@@ -111,17 +111,17 @@ public class AuthController {
         if (token != null) {
             authService.logout(token);
         }
-        return ResponseEntity.noContent()
-                .header(HttpHeaders.SET_COOKIE, expiredCookie().toString())
-                .build();
+        // Redis is the session allow-list, so revocation makes this token
+        // unusable immediately. Do not emit a cookie-deletion response here:
+        // an older delayed logout response could otherwise erase a newer
+        // login cookie shared by another browser tab.
+        return ResponseEntity.noContent().build();
     }
 
     @PostMapping("/logout-all")
     public ResponseEntity<Void> logoutAll(Authentication authentication) {
         authService.logoutAll(authentication.getName());
-        return ResponseEntity.noContent()
-                .header(HttpHeaders.SET_COOKIE, expiredCookie().toString())
-                .build();
+        return ResponseEntity.noContent().build();
     }
 
     private ResponseEntity<LoginResponse> loginResponse(LoginResponse response) {
@@ -136,16 +136,6 @@ public class AuthController {
         return ResponseEntity.ok()
                 .header(HttpHeaders.SET_COOKIE, cookie.toString())
                 .body(body);
-    }
-
-    private ResponseCookie expiredCookie() {
-        return ResponseCookie.from(cookieName, "")
-                .httpOnly(true)
-                .secure(cookieSecure)
-                .sameSite("Strict")
-                .path("/")
-                .maxAge(0)
-                .build();
     }
 
     private String currentToken(HttpServletRequest request, String authorizationHeader) {

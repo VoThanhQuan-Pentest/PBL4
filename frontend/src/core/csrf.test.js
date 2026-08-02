@@ -27,4 +27,29 @@ describe('getCsrfToken', () => {
     await expect(getCsrfToken()).rejects.toThrow('Unable to obtain CSRF token');
     await expect(getCsrfToken()).resolves.toBe('replacement');
   });
+
+  it('does not cache a successful response with a missing token', async () => {
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ token: '   ' }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ token: 'replacement' }) });
+    const { getCsrfToken } = await import('./csrf.js');
+
+    await expect(getCsrfToken()).rejects.toThrow('Unable to obtain CSRF token');
+    await expect(getCsrfToken()).resolves.toBe('replacement');
+
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('fetches a fresh token after the authentication state changes', async () => {
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ token: 'guest-token' }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ token: 'authenticated-token' }) });
+    const { getCsrfToken, resetCsrfToken } = await import('./csrf.js');
+
+    await expect(getCsrfToken()).resolves.toBe('guest-token');
+    resetCsrfToken();
+    await expect(getCsrfToken()).resolves.toBe('authenticated-token');
+
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+  });
 });

@@ -3,13 +3,14 @@
 - Elastic Stack: `9.4.2`
 - Scope: local/code only; AWS was statically validated and was not deployed.
 - Data classification: synthetic fixtures only.
-- Started: `2026-07-17T04:10:44Z`
-- Finished: `2026-07-17T04:12:13Z`
+- Started: `2026-07-29T11:21:35Z`
+- Finished: `2026-07-29T11:23:25Z`
 
 ## Checks
 
 - [x] **mapping_lifecycle** — geo_point mapping, access 7d, parse-error 3d
-- [x] **pipeline_latency_redaction** — arrival <=15s, XFF ignored, query redacted and body absent
+- [x] **pipeline_latency_redaction** — arrival <=15s, XFF ignored, query redacted, body absent and blank detection removed
+- [x] **scanner_enrichment** — Nikto, ffuf and dirb were enriched after blank detection cleanup
 - [x] **geoip_scope** — public City/ASN enrichment and TEST-NET exclusion verified
 - [x] **parse_error** — malformed timestamp and numeric fields were quarantined with a reason
 - [x] **deduplication** — two deliveries with the same trace.id produced one document

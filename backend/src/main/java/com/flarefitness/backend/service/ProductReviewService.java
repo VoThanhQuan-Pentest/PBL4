@@ -3,6 +3,7 @@ package com.flarefitness.backend.service;
 import com.flarefitness.backend.dto.review.ProductReviewRequest;
 import com.flarefitness.backend.dto.review.ProductReviewResponse;
 import com.flarefitness.backend.dto.review.ProductReviewStatusRequest;
+import com.flarefitness.backend.dto.review.PublicProductReviewResponse;
 import com.flarefitness.backend.dto.common.PageResponse;
 import com.flarefitness.backend.entity.Order;
 import com.flarefitness.backend.entity.Product;
@@ -22,6 +23,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -61,7 +63,7 @@ public class ProductReviewService {
     }
 
     @Transactional(readOnly = true)
-    public List<ProductReviewResponse> getVisibleReviewsByProduct(String productId) {
+    public List<PublicProductReviewResponse> getVisibleReviewsByProduct(String productId) {
         return getVisibleReviewsByProductPage(productId, 0, LEGACY_LIST_LIMIT).content();
     }
 
@@ -71,13 +73,17 @@ public class ProductReviewService {
     }
 
     @Transactional(readOnly = true)
-    public PageResponse<ProductReviewResponse> getVisibleReviewsByProductPage(String productId, Integer page, Integer size) {
+    public PageResponse<PublicProductReviewResponse> getVisibleReviewsByProductPage(
+            String productId,
+            Integer page,
+            Integer size
+    ) {
         productRepository.findActiveById(productId)
                 .orElseThrow(() -> new ResourceNotFoundException("Khong tim thay san pham."));
         PageRequest pageable = pageRequest(page, size);
         return PageResponse.from(productReviewRepository
                 .findByProductIdAndStatusOrderByCreatedAtDesc(productId, STATUS_VISIBLE, pageable)
-                .map(this::toResponse));
+                .map(this::toPublicResponse));
     }
 
     @Transactional(readOnly = true)
@@ -156,7 +162,7 @@ public class ProductReviewService {
 
     private void validateReviewableOrder(User user, Order order, String productId) {
         if (!String.valueOf(order.getUserId()).equals(String.valueOf(user.getId()))) {
-            throw new UnauthorizedException("Ban khong co quyen danh gia san pham trong don hang nay.");
+            throw new AccessDeniedException("Ban khong co quyen danh gia san pham trong don hang nay.");
         }
         if (!isDeliveredStatus(order.getTrangThaiDon())) {
             throw new BadRequestException("Chi co the danh gia san pham trong don hang da giao.");
@@ -199,6 +205,17 @@ public class ProductReviewService {
         );
     }
 
+    private PublicProductReviewResponse toPublicResponse(ProductReview review) {
+        return new PublicProductReviewResponse(
+                review.getId(),
+                review.getProductId(),
+                review.getReviewerName(),
+                review.getRating(),
+                review.getContent(),
+                review.getCreatedAt()
+        );
+    }
+
     private User requireCustomer(Authentication authentication) {
         if (authentication == null || !(authentication.getPrincipal() instanceof CurrentUserPrincipal principal)) {
             throw new UnauthorizedException("Phien dang nhap khong hop le.");
@@ -207,7 +224,7 @@ public class ProductReviewService {
         User user = principal.getUser();
         String authority = CurrentUserPrincipal.toAuthority(user.getRole());
         if ("ROLE_ADMIN".equals(authority) || "ROLE_STAFF".equals(authority)) {
-            throw new UnauthorizedException("Chuc nang danh gia chi danh cho khach hang.");
+            throw new AccessDeniedException("Chuc nang danh gia chi danh cho khach hang.");
         }
         return user;
     }

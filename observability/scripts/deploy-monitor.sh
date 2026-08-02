@@ -11,11 +11,27 @@ SSH_OPTIONS=${SSH_OPTIONS:-"-o BatchMode=yes -o StrictHostKeyChecking=accept-new
 rsync -az --delete --exclude '.secrets' --exclude 'runtime' \
   -e "ssh ${SSH_OPTIONS}" "${ROOT_DIR}/observability/" "${MONITOR_HOST}:/tmp/flare-observability/"
 
-ssh ${SSH_OPTIONS} "$MONITOR_HOST" 'sudo install -d -m 0750 -o ubuntu -g ubuntu /opt/flare && sudo rm -rf /opt/flare/observability && sudo mv /tmp/flare-observability /opt/flare/observability && sudo chown -R ubuntu:ubuntu /opt/flare/observability /srv/elastic'
+ssh ${SSH_OPTIONS} "$MONITOR_HOST" '
+  set -eu
+  sudo install -d -m 0750 -o ubuntu -g ubuntu /opt/flare
+  sudo rm -rf /opt/flare/observability
+  sudo mv /tmp/flare-observability /opt/flare/observability
+  sudo chown -R ubuntu:ubuntu /opt/flare/observability
+  sudo mountpoint -q /srv/elastic || { echo "Elasticsearch EBS volume is not mounted at /srv/elastic" >&2; exit 1; }
+  sudo install -d -m 0750 -o 1000 -g 0 /srv/elastic/elasticsearch
+'
 ssh ${SSH_OPTIONS} "$MONITOR_HOST" 'test -f /opt/flare/.secrets/observability/monitor/elasticsearch.password || /opt/flare/observability/scripts/bootstrap-secrets.sh'
 ssh ${SSH_OPTIONS} "$MONITOR_HOST" 'cd /opt/flare && docker compose -f observability/docker-compose.monitor.yml up -d elasticsearch'
 ssh ${SSH_OPTIONS} "$MONITOR_HOST" 'cd /opt/flare && /opt/flare/observability/scripts/setup-elastic.sh'
-ssh ${SSH_OPTIONS} "$MONITOR_HOST" 'cd /opt/flare && docker compose -f observability/docker-compose.monitor.yml up -d logstash kibana'
+ssh ${SSH_OPTIONS} "$MONITOR_HOST" '
+  set -eu
+  cd /opt/flare
+  # The observability tree was replaced above. Recreate Logstash so its
+  # bind-mounted pipeline/config point at the new inodes, then wait for the
+  # pipeline API before reporting the deployment as ready.
+  docker compose -f observability/docker-compose.monitor.yml up --wait --wait-timeout 300 -d --force-recreate --no-deps logstash
+  docker compose -f observability/docker-compose.monitor.yml up -d kibana
+'
 ssh ${SSH_OPTIONS} "$MONITOR_HOST" 'cd /opt/flare && /opt/flare/observability/scripts/setup-kibana.sh'
 
 printf 'Monitor deployed. Copy only the generated web client certificate directory before deploying Web:\n'

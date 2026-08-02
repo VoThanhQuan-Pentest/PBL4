@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
+ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 cd "$ROOT_DIR"
 for binary in docker jq; do command -v "$binary" >/dev/null 2>&1 || { printf 'Missing required command: %s\n' "$binary" >&2; exit 1; }; done
 
@@ -40,7 +40,8 @@ jq -s -e '
 
 export OBSERVABILITY_ROOT_DIR="$ROOT_DIR"
 export FILEBEAT_CERTS_DIR="${ROOT_DIR}/.secrets/observability/web"
-compose_args=(--env-file .env.e2e.example --project-name flare-local-elk --profile observability
+compose_project=${COMPOSE_PROJECT_NAME:-flare-local-elk}
+compose_args=(--env-file .env.e2e.example --project-name "$compose_project" --profile observability
   -f docker-compose.yml -f docker-compose.e2e.yml
   -f observability/docker-compose.monitor.yml -f observability/docker-compose.local.yml)
 

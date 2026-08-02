@@ -59,9 +59,11 @@ runcmd:
     [ -n "$${device:-}" ] || { echo 'Monitor EBS data volume did not attach'; exit 1; }
     if ! blkid "$device" >/dev/null 2>&1; then mkfs.ext4 -F "$device"; fi
     uuid=$(blkid -s UUID -o value "$device")
-    grep -q " $${uuid} /srv/elastic " /etc/fstab || echo "UUID=$${uuid} /srv/elastic ext4 defaults,nofail 0 2" >> /etc/fstab
+    grep -Fq "UUID=$${uuid} /srv/elastic " /etc/fstab || echo "UUID=$${uuid} /srv/elastic ext4 defaults,nofail 0 2" >> /etc/fstab
     mountpoint -q /srv/elastic || mount /srv/elastic
-    chown 1000:1000 /srv/elastic
+    # The pinned Elasticsearch image runs as 1000:0. Pre-create the bind
+    # source after the EBS mount so Docker never creates it as root.
+    install -d -m 0750 -o 1000 -g 0 /srv/elastic/elasticsearch
   - ufw --force reset
   - ufw default deny incoming
   - ufw default allow outgoing

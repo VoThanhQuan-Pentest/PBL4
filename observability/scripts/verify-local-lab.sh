@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
+ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 RUNTIME_DIR="${ROOT_DIR}/observability/runtime"
 RESULT_FILE="${RUNTIME_DIR}/verification.json"
 WEB_URL=${FLARE_LAB_TARGET:-"http://127.0.0.1:${LOCAL_LAB_WEB_PORT:-8088}"}
+KIBANA_URL=${KIBANA_URL:-"http://127.0.0.1:${LOCAL_LAB_KIBANA_PORT:-5601}"}
 export OBSERVABILITY_ROOT_DIR="$ROOT_DIR"
 export FILEBEAT_CERTS_DIR="${ROOT_DIR}/.secrets/observability/web"
 compose_args=(--env-file "${ROOT_DIR}/.env.e2e.example" --project-name "${COMPOSE_PROJECT_NAME:-flare-local-elk}" --profile observability
@@ -25,6 +26,8 @@ pass() { record "$1" true "$2"; printf 'PASS: %s\n' "$1"; }
 
 elastic_api() {
   local method=$1 endpoint=$2
+  # Password expansion belongs to the Elasticsearch container.
+  # shellcheck disable=SC2016
   compose exec -T elasticsearch bash -ceu '
     password=$(cat /run/flare-secrets/elasticsearch.password)
     args=(--fail --silent --show-error --cacert /usr/share/elasticsearch/config/certs/ca.crt --user "elastic:${password}" -X "$1")
@@ -70,8 +73,19 @@ trace=$(awk 'BEGIN{IGNORECASE=1} /^X-Request-ID:/ {gsub("\r", "", $2); print $2}
 [ -n "$trace" ] || fail pipeline_latency 'missing X-Request-ID response header'
 wait_trace "$trace" 15 || fail pipeline_latency 'request did not arrive within 15 seconds'
 doc=$(get_trace "$trace")
-printf '%s' "$doc" | jq -e '.hits.hits[0]._source.source.ip != "8.8.8.8" and .hits.hits[0]._source.url.query=="[REDACTED]" and (tostring|contains("synthetic-secret-marker")|not) and (.hits.hits[0]._source|has("body")|not)' >/dev/null || fail redaction_proxy 'spoofed XFF or query/body leakage detected'
-pass pipeline_latency_redaction 'arrival <=15s, XFF ignored, query redacted and body absent'
+printf '%s' "$doc" | jq -e '.hits.hits[0]._source.source.ip != "8.8.8.8" and .hits.hits[0]._source.url.query=="[REDACTED]" and (tostring|contains("synthetic-secret-marker")|not) and (.hits.hits[0]._source|has("body")|not) and ((.hits.hits[0]._source.flare // {})|has("detection")|not)' >/dev/null || fail redaction_proxy 'spoofed XFF, query/body leakage or an empty detection object was detected'
+pass pipeline_latency_redaction 'arrival <=15s, XFF ignored, query redacted, body absent and blank detection removed'
+
+# Removing Nginx's blank detection object must leave the scanner-UA enrichment
+# path available rather than suppressing it with an empty-but-existing field.
+for scanner_agent in 'Nikto synthetic verifier' 'ffuf synthetic verifier' 'dirb synthetic verifier'; do
+  curl --fail --silent --show-error -D "$headers" -o /dev/null -A "$scanner_agent" "${WEB_URL}/?scanner=synthetic"
+  scanner_trace=$(awk 'BEGIN{IGNORECASE=1} /^X-Request-ID:/ {gsub("\r", "", $2); print $2}' "$headers" | tail -n 1)
+  [ -n "$scanner_trace" ] || fail scanner_enrichment "missing X-Request-ID for ${scanner_agent}"
+  wait_trace "$scanner_trace" 15 || fail scanner_enrichment "${scanner_agent} did not arrive within 15 seconds"
+  get_trace "$scanner_trace" | jq -e '.hits.hits[0]._source.flare.detection.type=="scanner_user_agent" and .hits.hits[0]._source.flare.detection.severity=="medium" and .hits.hits[0]._source.flare.detection.reason=="User-Agent matched a scanner heuristic"' >/dev/null || fail scanner_enrichment "scanner enrichment failed for ${scanner_agent}"
+done
+pass scanner_enrichment 'Nikto, ffuf and dirb were enriched after blank detection cleanup'
 
 # Public GeoIP and explicit reserved CIDR classification.
 public_trace="verify-public-$(date +%s)"
@@ -110,7 +124,7 @@ compose stop logstash >/dev/null
 queue_prefix="verify-queue-$(date +%s)"
 for number in $(seq 1 5); do event "${queue_prefix}-${number}" 127.0.0.1 200 /queued | inject_line; done
 sleep 3
-compose start logstash >/dev/null
+compose up --wait --wait-timeout 120 -d logstash >/dev/null
 for number in $(seq 1 5); do wait_trace "${queue_prefix}-${number}" 30 || fail filebeat_queue "queued event ${number} was not delivered"; done
 compose restart logstash >/dev/null
 sleep 5
@@ -136,7 +150,7 @@ for number in $(seq 1 25); do curl --silent --output /dev/null --max-time 5 "${W
 LOCAL_FIXTURE_CONFIRM=yes "${ROOT_DIR}/observability/scripts/replay-5xx-fixture.sh" >/dev/null
 curl --silent --output /dev/null --path-as-is "${WEB_URL}/?q=%27%20union%20select%20synthetic" || true
 curl --silent --output /dev/null --path-as-is "${WEB_URL}/?q=%3Cscript%3Esynthetic%3C%2Fscript%3E" || true
-curl --silent --output /dev/null --path-as-is "${WEB_URL}/%2e%2e%2fsynthetic" || true
+curl --silent --output /dev/null --path-as-is "${WEB_URL}/?file=..%2F..%2Fetc%2Fpasswd" || true
 curl --silent --output /dev/null -A 'Nikto synthetic verifier' "${WEB_URL}/" || true
 
 expected_rules='["flare-lab-auth-bruteforce","flare-lab-high-request-rate","flare-lab-high-web-heuristic","flare-lab-scanner-user-agent","flare-lab-server-errors","flare-lab-web-scan-404"]'
@@ -160,7 +174,7 @@ role=$(elastic_api GET '/_security/role/flare_analyst' </dev/null)
 printf '%s' "$role" | jq -e '.flare_analyst.cluster==[] and ([.flare_analyst.indices[].privileges[]]|all(.=="read" or .=="view_index_metadata")) and ([.flare_analyst.applications[].privileges[]]|all(endswith(".read")))' >/dev/null || fail analyst_role 'role contains a write, management or non-read application privilege'
 analyst_password=$(<"${ROOT_DIR}/.secrets/observability/monitor/analyst.password")
 for dashboard in flare-overview flare-geoip flare-security; do
-  code=$(curl --silent --output /dev/null --write-out '%{http_code}' --config <(printf 'user = "flare_analyst:%s"\n' "$analyst_password") "http://127.0.0.1:5601/s/flare-lab/api/saved_objects/dashboard/${dashboard}")
+  code=$(curl --silent --output /dev/null --write-out '%{http_code}' --config <(printf 'user = "flare_analyst:%s"\n' "$analyst_password") "${KIBANA_URL}/s/flare-lab/api/saved_objects/dashboard/${dashboard}")
   [ "$code" = 200 ] || fail analyst_role "analyst cannot read ${dashboard} (HTTP ${code})"
 done
 pass analyst_role 'analyst can read all dashboards; role exposes only read privileges'

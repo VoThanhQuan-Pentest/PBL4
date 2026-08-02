@@ -80,9 +80,36 @@ services:
       retries: 10
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+    volumes:
+      - redis-data:/data
     networks:
       - flare-internal
     restart: unless-stopped
+
+  nginx-logs-init:
+    image: nginx:stable-alpine@sha256:ec664813a30459a8e7176315268a623f6b31abc370eeac51c7de81cd4ec4d451
+    # UID 0 retains only CHOWN/FOWNER. GID 1000 gives the initializer read and
+    # traverse access after a previous run has secured the directory as
+    # 101:1000/2750, so repeated Compose starts do not need DAC_OVERRIDE.
+    user: "0:1000"
+    entrypoint: ["sh", "-c"]
+    command:
+      - >-
+        chown -R 101:1000 /var/log/nginx
+        && find /var/log/nginx -type f -exec chmod 0640 {} +
+        && chmod 2750 /var/log/nginx
+    volumes:
+      - nginx-logs:/var/log/nginx
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - FOWNER
+    network_mode: none
+    restart: "no"
 
   nginx:
     build:
@@ -91,6 +118,8 @@ services:
     depends_on:
       app:
         condition: service_healthy
+      nginx-logs-init:
+        condition: service_completed_successfully
     environment:
       # Direct-Nginx default: do not trust forwarded headers from clients.
       # Configure only the CIDR of the TLS terminator immediately in front of nginx.
@@ -129,6 +158,8 @@ services:
     depends_on:
       filebeat-data-init:
         condition: service_completed_successfully
+      nginx-logs-init:
+        condition: service_completed_successfully
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=32m
@@ -160,6 +191,7 @@ services:
 
 volumes:
   mysql-data:
+  redis-data:
   nginx-logs:
   filebeat-data:
 

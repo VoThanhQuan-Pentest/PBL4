@@ -1,0 +1,87 @@
+name: Observability runtime
+
+on:
+  pull_request:
+    paths:
+      - 'docker-compose*.yml'
+      - 'nginx/**'
+      - 'observability/**'
+      - 'scripts/verify-compose-hardening.sh'
+      - 'scripts/verify-docker-runtime-regressions.sh'
+      - 'scripts/verify-redis-volume-migration.sh'
+      - '.github/workflows/observability-runtime.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'docker-compose*.yml'
+      - 'nginx/**'
+      - 'observability/**'
+      - 'scripts/verify-compose-hardening.sh'
+      - 'scripts/verify-docker-runtime-regressions.sh'
+      - 'scripts/verify-redis-volume-migration.sh'
+      - '.github/workflows/observability-runtime.yml'
+  schedule:
+    - cron: '17 2 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: observability-runtime-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  full-elk:
+    name: Full ELK rotation and recovery
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      COMPOSE_PROJECT_NAME: pbl4-observability-runtime-${{ github.run_id }}-${{ github.run_attempt }}
+      LOCAL_LAB_WEB_PORT: '8088'
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Generate isolated observability secrets
+        run: observability/scripts/bootstrap-secrets.sh
+      - name: Validate image-native configuration
+        run: observability/scripts/validate-config.sh
+      - name: Start the isolated full stack
+        run: observability/scripts/local-lab.sh up
+      - name: Verify ELK, GeoIP, queues, dashboards and rules
+        run: observability/scripts/local-lab.sh verify
+      - name: Verify logrotate and Filebeat continuity
+        run: observability/scripts/verify-logrotate-continuity.sh
+      - name: Verify complete restart recovery
+        run: observability/scripts/verify-stack-recovery.sh
+      - name: Capture sanitized diagnostics
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p observability/runtime
+          docker compose --env-file .env.e2e.example --project-name "$COMPOSE_PROJECT_NAME" --profile observability \
+            -f docker-compose.yml -f docker-compose.e2e.yml \
+            -f observability/docker-compose.monitor.yml -f observability/docker-compose.local.yml \
+            ps --all > observability/runtime/ci-compose-ps.txt 2>&1 || true
+          docker compose --env-file .env.e2e.example --project-name "$COMPOSE_PROJECT_NAME" --profile observability \
+            -f docker-compose.yml -f docker-compose.e2e.yml \
+            -f observability/docker-compose.monitor.yml -f observability/docker-compose.local.yml \
+            logs --no-color --timestamps > observability/runtime/ci-compose-logs.txt 2>&1 || true
+          for secret_file in .secrets/observability/monitor/*.password; do
+            [ -f "$secret_file" ] || continue
+            secret=$(<"$secret_file")
+            [ -z "$secret" ] || sed -i "s/${secret}/[REDACTED]/g" observability/runtime/ci-compose-logs.txt
+          done
+      - name: Upload runtime evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: observability-runtime-${{ github.run_id }}-${{ github.run_attempt }}
+          path: observability/runtime
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Tear down only the isolated runtime project
+        if: always()
+        env:
+          LOCAL_LAB_PURGE_CONFIRM: 'yes'
+        run: observability/scripts/local-lab.sh purge

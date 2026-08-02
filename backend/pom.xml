@@ -23,6 +23,13 @@
         <java.version>21</java.version>
         <jjwt.version>0.12.6</jjwt.version>
         <jacoco.version>0.8.15</jacoco.version>
+        <!-- Fixes CVE-2026-59901 in netty-codec-compression. -->
+        <netty.version>4.1.136.Final</netty.version>
+        <!-- Fixes the Tomcat vulnerabilities reported against 10.1.55 by
+             Dependency-Check, including CVE-2026-55956. -->
+        <tomcat.version>10.1.57</tomcat.version>
+        <!-- Moves Log4j beyond the 2.25.4 security-fix baseline. -->
+        <log4j2.version>2.25.5</log4j2.version>
         <!-- Keeps direct surefire:test invocations valid when JaCoCo's
              prepare-agent execution is not part of the selected lifecycle. -->
         <jacoco.agent.argLine></jacoco.agent.argLine>

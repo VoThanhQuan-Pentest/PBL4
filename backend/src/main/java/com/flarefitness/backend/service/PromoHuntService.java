@@ -19,6 +19,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -216,7 +217,7 @@ public class PromoHuntService {
         }
         String authority = CurrentUserPrincipal.toAuthority(user.getRole());
         if ("ROLE_ADMIN".equals(authority) || "ROLE_STAFF".equals(authority)) {
-            throw new UnauthorizedException("Tai khoan nhan vien va quan tri vien chi duoc xem san khuyen mai.");
+            throw new AccessDeniedException("Tai khoan nhan vien va quan tri vien chi duoc xem san khuyen mai.");
         }
         return user;
     }
