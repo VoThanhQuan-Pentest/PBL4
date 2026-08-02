@@ -80,7 +80,7 @@ state_dir="${runtime_dir}/state"
 mkdir -m 0777 "$state_dir"
 
 docker run --rm --name "${project}-logrotate-setup" --network none \
-  --entrypoint sh -v "${bind_dir}:/opt/flare/nginx-logs" "$runner_image" -ceu '
+  --user 0:0 --entrypoint sh -v "${bind_dir}:/opt/flare/nginx-logs" "$runner_image" -ceu '
     printf "%s\n" before-rotation-marker > /opt/flare/nginx-logs/access.json.log
     : > /opt/flare/nginx-logs/error.log
     chown 101:1000 /opt/flare/nginx-logs/*.log
@@ -88,12 +88,13 @@ docker run --rm --name "${project}-logrotate-setup" --network none \
   '
 
 docker run --rm --name "${project}-logrotate-success" --network none \
+  --user 0:0 \
   -e FAKE_DOCKER_LOG=/state/docker.calls \
   -v "${bind_dir}:/opt/flare/nginx-logs" -v "${state_dir}:/state" \
   "$runner_image" --verbose --force --state /state/status /etc/nginx-access
 
 docker run --rm --name "${project}-logrotate-assert" --network none \
-  --entrypoint sh -v "${bind_dir}:/opt/flare/nginx-logs:ro" -v "${state_dir}:/state:ro" \
+  --user 101:1000 --entrypoint sh -v "${bind_dir}:/opt/flare/nginx-logs:ro" -v "${state_dir}:/state:ro" \
   "$runner_image" -ceu '
     current=$(stat -c "%u:%g %a" /opt/flare/nginx-logs/access.json.log)
     [ "$current" = "101:1000 640" ]
@@ -102,10 +103,11 @@ docker run --rm --name "${project}-logrotate-assert" --network none \
   '
 
 docker run --rm --name "${project}-logrotate-refill" --network none \
-  --entrypoint sh -v "${bind_dir}:/opt/flare/nginx-logs" "$runner_image" \
+  --user 101:1000 --entrypoint sh -v "${bind_dir}:/opt/flare/nginx-logs" "$runner_image" \
   -ceu 'rm -f /opt/flare/nginx-logs/access.json.log-*; printf "%s\n" signal-failure-marker > /opt/flare/nginx-logs/access.json.log'
 
 if docker run --rm --name "${project}-logrotate-signal-failure" --network none \
+  --user 0:0 \
   -e FAKE_DOCKER_LOG=/state/docker.calls -e FAKE_DOCKER_KILL_FAIL=yes \
   -v "${bind_dir}:/opt/flare/nginx-logs" -v "${state_dir}:/state" \
   "$runner_image" --verbose --force --state /state/status /etc/nginx-access; then

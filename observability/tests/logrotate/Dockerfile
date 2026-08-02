@@ -11,4 +11,9 @@ RUN chown root:root /etc/nginx-access /usr/bin/docker \
     && chmod 0644 /etc/nginx-access \
     && chmod 0755 /usr/bin/docker
 
+# Fail closed when the image is started outside the regression harness. The
+# harness opts into UID 0 only for the exact logrotate operations that must
+# create/chown host-compatible log files.
+USER 65534:65534
+
 ENTRYPOINT ["/usr/sbin/logrotate"]

@@ -66,6 +66,7 @@ event "$pre_trace" | compose exec -T nginx sh -c 'tee -a /var/log/nginx/access.j
 wait_trace "$pre_trace" || { printf 'Pre-rotation event was not ingested exactly once.\n' >&2; exit 1; }
 
 docker run --rm --name "${project}-logrotate-continuity" --network none \
+  --user 0:0 \
   -e FAKE_DOCKER_LOG=/state/docker.calls \
   -v "${nginx_volume}:/opt/flare/nginx-logs" -v "${runtime_dir}/state:/state" \
   "$runner_image" --verbose --force --state /state/status /etc/nginx-access
