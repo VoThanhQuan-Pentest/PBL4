@@ -124,7 +124,7 @@ compose stop logstash >/dev/null
 queue_prefix="verify-queue-$(date +%s)"
 for number in $(seq 1 5); do event "${queue_prefix}-${number}" 127.0.0.1 200 /queued | inject_line; done
 sleep 3
-compose start logstash >/dev/null
+compose up --wait --wait-timeout 120 -d logstash >/dev/null
 for number in $(seq 1 5); do wait_trace "${queue_prefix}-${number}" 30 || fail filebeat_queue "queued event ${number} was not delivered"; done
 compose restart logstash >/dev/null
 sleep 5
