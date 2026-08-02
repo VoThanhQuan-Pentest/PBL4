@@ -35,7 +35,7 @@ resources created for that project.
 
 ## Secrets and rotation
 
-`.secrets/observability` is mode `0700`; password, private-key and keystore files are `0600`. Elasticsearch uses `ELASTIC_PASSWORD_FILE`. Kibana stores `elasticsearch.password` and all three encryption keys in `kibana.keystore`; Logstash stores `LOGSTASH_INTERNAL_PASSWORD` in `logstash.keystore`. Compose does not load a password environment file. The analyst password remains a separate file and is mounted read-only only into the screenshot container.
+`.secrets/observability` is mode `0700`. Host-only passwords and the CA key remain `0600`; the five private runtime files mounted into Monitor containers are `0640` and group-scoped to the pinned image runtime identities. The Web client key remains `0600` and owned by Filebeat's numeric identity. Elasticsearch uses `ELASTIC_PASSWORD_FILE`. Kibana stores `elasticsearch.password` and all three encryption keys in `kibana.keystore`; Logstash stores `LOGSTASH_INTERNAL_PASSWORD` in `logstash.keystore`. Compose does not load a password environment file. The analyst password remains a separate file and is mounted read-only only into the screenshot container.
 
 Bootstrap is idempotent for a complete set and refuses partial or conflicting state. To rotate, stop Web/Filebeat and Monitor, archive only non-secret evidence, remove the entire `.secrets/observability` directory, rerun `bootstrap`, run `up`, then distribute only `.secrets/observability/web/` to Web. Never distribute `ca.key`, product keystores or Monitor password files.
 
