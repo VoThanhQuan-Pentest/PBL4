@@ -10,6 +10,13 @@ set -Eeuo pipefail
 [[ $# == 1 && -f "$1/backend/Dockerfile" ]] || { printf 'Supply the checked-out baseline source directory.\n' >&2; exit 2; }
 ROOT=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 cd "$ROOT"
+# Match local-lab.sh when recreating the writer. Child-script exports do not
+# survive into this process; defaults point outside the checkout and assume
+# GID 1000, while hosted runners own the private 0640 files as another group.
+export OBSERVABILITY_ROOT_DIR="$ROOT"
+export FILEBEAT_CERTS_DIR="$ROOT/.secrets/observability/web"
+UEBA_OPERATOR_GID=$(id -g)
+export UEBA_OPERATOR_GID
 baseline_source=$(realpath "$1")
 baseline_sha=$(git -C "$baseline_source" rev-parse HEAD)
 [[ "$baseline_sha" == d7bee8aaddab809e05b010deca69433f9c85d835 ]] || {
