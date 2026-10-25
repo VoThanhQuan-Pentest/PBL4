@@ -478,8 +478,10 @@ jobs:
       - name: Build UEBA worker image
         run: docker build ${{ inputs.cold_cache && '--no-cache' || '' }} --pull=false --tag flare-ueba-worker:ci ueba-worker
       - name: Build prevention gateway image
+        id: images-ready
         run: docker build ${{ inputs.cold_cache && '--no-cache' || '' }} --pull=false --tag flare-prevention-gateway:ci gateway
       - name: Scan repository dependencies, secrets, and configuration
+        if: always() && steps.images-ready.outcome == 'success'
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: fs
@@ -488,6 +490,7 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: '1'
       - name: Scan backend container image
+        if: always() && steps.images-ready.outcome == 'success'
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
@@ -495,6 +498,7 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: '1'
       - name: Scan edge container image
+        if: always() && steps.images-ready.outcome == 'success'
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
@@ -502,6 +506,7 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: '1'
       - name: Scan UEBA worker container image
+        if: always() && steps.images-ready.outcome == 'success'
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
@@ -509,6 +514,7 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: '1'
       - name: Scan prevention gateway container image
+        if: always() && steps.images-ready.outcome == 'success'
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
@@ -516,6 +522,7 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: '1'
       - name: Generate backend SBOM
+        if: always() && steps.images-ready.outcome == 'success'
         uses: anchore/sbom-action@aa0e114b2e19480f157109b9922bda359bd98b90 # v0.20.8
         with:
           image: flarefitness-backend:ci
@@ -524,6 +531,7 @@ jobs:
           output-file: backend-sbom.cdx.json
           upload-artifact-retention: 30
       - name: Generate edge SBOM
+        if: always() && steps.images-ready.outcome == 'success'
         uses: anchore/sbom-action@aa0e114b2e19480f157109b9922bda359bd98b90 # v0.20.8
         with:
           image: flarefitness-nginx:ci
@@ -532,6 +540,7 @@ jobs:
           output-file: edge-sbom.cdx.json
           upload-artifact-retention: 30
       - name: Generate worker SBOM
+        if: always() && steps.images-ready.outcome == 'success'
         uses: anchore/sbom-action@aa0e114b2e19480f157109b9922bda359bd98b90 # v0.20.8
         with:
           image: flare-ueba-worker:ci
@@ -540,6 +549,7 @@ jobs:
           output-file: worker-sbom.cdx.json
           upload-artifact-retention: 30
       - name: Generate gateway SBOM
+        if: always() && steps.images-ready.outcome == 'success'
         uses: anchore/sbom-action@aa0e114b2e19480f157109b9922bda359bd98b90 # v0.20.8
         with:
           image: flare-prevention-gateway:ci
