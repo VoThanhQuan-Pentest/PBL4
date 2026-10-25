@@ -624,10 +624,14 @@ public class SiemPreventionService {
                 || !cleanReason.matches("[A-Za-z0-9 _-]+")) {
             throw new BadRequestException("Invalid lookup reason.");
         }
+        // Serialize queue admission across processes using the existing policy
+        // mutex. A locking read also sees a winner committed after an enclosing
+        // REPEATABLE READ transaction established its snapshot.
+        jdbc.queryForObject("SELECT id FROM siem_prevention_policy_lock WHERE id=1 FOR UPDATE", Integer.class);
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         List<String> recent = jdbc.query("""
                 SELECT id FROM siem_ip_lookup_requests
-                WHERE ip_address=? AND requested_at>? ORDER BY requested_at DESC LIMIT 1
+                WHERE ip_address=? AND requested_at>? ORDER BY requested_at DESC LIMIT 1 FOR UPDATE
                 """, (row, ignored) -> row.getString(1), ip, now.minusMinutes(5));
         if (!recent.isEmpty()) return recent.getFirst();
         String id = "ip-lookup-" + UUID.randomUUID();

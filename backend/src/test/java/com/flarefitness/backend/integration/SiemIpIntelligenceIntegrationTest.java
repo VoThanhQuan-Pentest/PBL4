@@ -12,6 +12,9 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -19,6 +22,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @SpringBootTest(properties = {
         "siem.prevention.enabled=true",
@@ -33,6 +38,7 @@ class SiemIpIntelligenceIntegrationTest extends ContainerizedIntegrationTest {
     @Autowired private SiemPreventionService service;
     @Autowired private UserRepository users;
     @Autowired private PasswordEncoder passwords;
+    @Autowired private PlatformTransactionManager transactions;
 
     @Test
     void missingProviderKeysAreReportedAndDemoDataIsExplicitlyMarked() {
@@ -93,6 +99,40 @@ class SiemIpIntelligenceIntegrationTest extends ContainerizedIntegrationTest {
                 """, Long.class, riskIp)).isZero();
     }
 
+    @Test
+    void concurrentLookupAdmissionUsesTheCommittedWinnerEvenWithAnOlderTransactionSnapshot() throws Exception {
+        String ip = uniquePublicTestIp();
+        var ready = new CountDownLatch(2);
+        var start = new CountDownLatch(1);
+        try (var executor = Executors.newFixedThreadPool(2)) {
+            var tasks = java.util.stream.IntStream.range(0, 2).mapToObj(ignored -> executor.submit(() -> {
+                new TransactionTemplate(transactions).executeWithoutResult(status -> {
+                    // Both callers establish their snapshot before either can insert.
+                    assertThat(jdbc.queryForObject(
+                            "SELECT COUNT(*) FROM siem_ip_lookup_requests WHERE ip_address=?", Long.class, ip)).isZero();
+                    ready.countDown();
+                    try {
+                        if (!start.await(10, TimeUnit.SECONDS)) throw new AssertionError("Admission start timed out");
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        throw new AssertionError(interrupted);
+                    }
+                    service.requestLookupForSignal(ip, "CONCURRENT_TEST_FIXTURE");
+                });
+            })).toList();
+            try {
+                assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
+            } finally {
+                start.countDown();
+            }
+            for (var task : tasks) task.get(20, TimeUnit.SECONDS);
+        }
+        assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM siem_ip_lookup_requests WHERE ip_address=?", Long.class, ip)).isEqualTo(1);
+        assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM siem_ip_blocks WHERE ip_address=?", Long.class, ip)).isZero();
+    }
+
     private void insertFailedLogin(LocalDateTime when, String sourceIp) {
         jdbc.update("""
                 INSERT INTO siem_security_events
@@ -102,8 +142,12 @@ class SiemIpIntelligenceIntegrationTest extends ContainerizedIntegrationTest {
     }
 
     private String uniquePublicTestIp() {
-        int lastOctet = 1 + Math.floorMod(UUID.randomUUID().hashCode(), 254);
-        return "8.8.4." + lastOctet;
+        // Avoid collisions with another test's retained history in a /24 pool.
+        String suffix = UUID.randomUUID().toString().replace("-", "");
+        String address = "2606:4700:" + java.util.stream.IntStream.range(0, 6)
+                .mapToObj(index -> suffix.substring(index * 4, index * 4 + 4))
+                .collect(java.util.stream.Collectors.joining(":"));
+        return SiemPreventionService.canonicalPublicIp(address);
     }
 
     private Authentication admin() {
