@@ -35,6 +35,32 @@ class AuthAndCatalogIntegrationTest extends ContainerizedIntegrationTest {
     @Autowired private UserRepository userRepository;
     @Autowired private ProductRepository productRepository;
     @Autowired private PasswordEncoder passwordEncoder;
+    @Autowired private org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerAdapter handlerAdapter;
+
+    record WireContract(String eventAction, LocalDateTime observedAt, JsonNode elkHit, String absentField) { }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void mvcConverterPreservesLegacyWireFormatAndNativeElkNumbers() throws Exception {
+        var hit = objectMapper.createObjectNode().put("_index", "logs-flare.security-lab").put("_id", "unicode-đ");
+        var source = hit.putObject("_source");
+        source.put("source.ip", "192.0.2.1");
+        source.put("large", new java.math.BigInteger("123456789012345678901234567890"));
+        source.put("decimal", new BigDecimal("0.12345678901234567890123456789"));
+        source.putNull("missing");
+        source.putArray("ordered").add("Tiếng Việt").add(42).addNull().addObject().put("nested", true);
+        var wire = new WireContract("login_failure", LocalDateTime.of(2026, 10, 26, 0, 0), hit, null);
+        var converter = (org.springframework.http.converter.HttpMessageConverter<Object>) handlerAdapter.getMessageConverters()
+                .stream().filter(c -> c.canWrite(WireContract.class, MediaType.APPLICATION_JSON)).findFirst().orElseThrow();
+        var output = new org.springframework.mock.http.MockHttpOutputMessage();
+        converter.write(wire, MediaType.APPLICATION_JSON, output);
+        JsonNode decoded = objectMapper.reader().with(com.fasterxml.jackson.databind.DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
+                .readTree(output.getBodyAsBytes());
+        assertThat(decoded.path("event_action").asText()).isEqualTo("login_failure");
+        assertThat(decoded.path("observed_at").asText()).isEqualTo("2026-10-26T00:00:00");
+        assertThat(decoded.has("absent_field")).isFalse();
+        assertThat(decoded.path("elk_hit")).isEqualTo(hit);
+    }
 
     private String username;
     private String password;

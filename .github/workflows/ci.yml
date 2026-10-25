@@ -170,7 +170,7 @@ jobs:
             -v "$PWD/backend/src:/backend/src:ro" \
             -v "$PWD/observability/scripts:/observability/scripts:ro" \
             -v "$test_workspace:/workspace:ro" \
-            -w /code -e PYTHONPATH=/code \
+            -w /code -e PYTHONPATH=/code:/code/tests \
             -e UEBA_RECOVERY_PROJECT_ROOT=/workspace \
             --entrypoint python flare-ueba-worker:test \
           -m pytest -p no:cacheprovider tests -v

@@ -30,6 +30,8 @@ class SiemContainmentIntegrationTest extends ContainerizedIntegrationTest {
     @Autowired AuthService auth;
     @Autowired JwtTokenService jwt;
     @Autowired RedisTokenStore tokens;
+    @Autowired com.flarefitness.backend.service.siem.SiemIncidentService workflow;
+    @Autowired org.springframework.jdbc.core.JdbcTemplate jdbc;
     private User user(String role) {
         User u=new User();u.setId(UUID.randomUUID().toString());u.setUsername("practice-"+UUID.randomUUID());u.setRole(role);
         u.setPassword(passwords.encode("Practice#1234"));u.setHoTen("SOC-PRACTICE");u.setStatus("Hoat dong");u.setCreatedAt(LocalDateTime.now(ZoneOffset.UTC));
@@ -89,5 +91,38 @@ class SiemContainmentIntegrationTest extends ContainerizedIntegrationTest {
         SiemIncident protectedCase=incident(actor,other);
         assertThatThrownBy(()->containment.isolate(protectedCase.getId(),new SiemContainmentService.Request(UUID.randomUUID().toString(),protectedCase.getVersion(),request.reason(),"UNTIL_REVOKED"),principal(actor))).isInstanceOf(AccessDeniedException.class);
         assertThat(users.findById(customer.getId()).orElseThrow().isSocIsolationActive()).isFalse();
+    }
+
+    @Test void confirmedClosureRequiresVerificationAgainstTheCurrentIncidentVersion() {
+        User actor=user("SOC L2"); SiemIncident incident=incident(actor,user("CUSTOMER"));
+        String reason="Workflow-only fixture: no response action or recovery is required.";
+        java.util.function.Supplier<com.flarefitness.backend.dto.siem.SiemDtos.TransitionIncident> close=()->
+            new com.flarefitness.backend.dto.siem.SiemDtos.TransitionIncident(
+                incidents.findById(incident.getId()).orElseThrow().getVersion(),
+                com.flarefitness.backend.dto.siem.SiemDtos.TransitionAction.CLOSE, reason, IncidentConclusion.TRUE_POSITIVE);
+        assertThatThrownBy(()->workflow.transitionIncident(incident.getId(),close.get(),principal(actor)))
+            .isInstanceOf(ConflictException.class);
+        containment.verify(incident.getId(),new SiemContainmentService.Verification(UUID.randomUUID().toString(),
+            incident.getVersion(),reason,"NOT_REQUIRED","NOT_REQUIRED"),principal(actor));
+        var changed=incidents.findById(incident.getId()).orElseThrow();
+        changed.setTitle(changed.getTitle()+" revised evidence");incidents.saveAndFlush(changed);
+        assertThatThrownBy(()->workflow.transitionIncident(incident.getId(),close.get(),principal(actor)))
+            .isInstanceOf(ConflictException.class);
+        containment.verify(incident.getId(),new SiemContainmentService.Verification(UUID.randomUUID().toString(),
+            incidents.findById(incident.getId()).orElseThrow().getVersion(),reason,"NOT_REQUIRED","NOT_REQUIRED"),principal(actor));
+        assertThat(workflow.transitionIncident(incident.getId(),close.get(),principal(actor)).status()).isEqualTo(IncidentStatus.CLOSED);
+    }
+
+    @Test void unresolvedContainmentCannotBeVerifiedAsRecovered() {
+        User actor=user("SOC L2"); SiemIncident incident=incident(actor,user("CUSTOMER"));
+        String reason="Controlled fixture checks pending and failed response actions.";
+        var action=containment.isolate(incident.getId(),new SiemContainmentService.Request(UUID.randomUUID().toString(),
+            incident.getVersion(),reason,"15_MINUTES"),principal(actor));
+        for(String state:List.of("PENDING","FAILED")) {
+            jdbc.update("UPDATE siem_containment_actions SET status=? WHERE id=?",state,action.id());
+            var check=new SiemContainmentService.Verification(UUID.randomUUID().toString(),
+                incidents.findById(incident.getId()).orElseThrow().getVersion(),reason,"PASSED","PASSED");
+            assertThatThrownBy(()->containment.verify(incident.getId(),check,principal(actor))).isInstanceOf(ConflictException.class);
+        }
     }
 }

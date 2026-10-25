@@ -48,7 +48,7 @@ class AuthControllerTest {
         ResponseEntity<Void> response = controller.logout(null, request);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
-        assertThat(response.getHeaders()).doesNotContainKey(HttpHeaders.SET_COOKIE);
+        assertThat(response.getHeaders().getFirst(HttpHeaders.SET_COOKIE)).isNull();
         verify(authService).logout("customer-token");
     }
 
@@ -59,7 +59,7 @@ class AuthControllerTest {
         ResponseEntity<Void> response = controller.logoutAll(authentication);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
-        assertThat(response.getHeaders()).doesNotContainKey(HttpHeaders.SET_COOKIE);
+        assertThat(response.getHeaders().getFirst(HttpHeaders.SET_COOKIE)).isNull();
         verify(authService).logoutAll("customer");
     }
 }

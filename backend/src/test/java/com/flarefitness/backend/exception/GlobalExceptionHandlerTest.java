@@ -82,7 +82,7 @@ class GlobalExceptionHandlerTest {
         String rawPath = "/api/private/attacker-path-canary";
         var handler = new GlobalExceptionHandler();
         for (Exception exception : java.util.List.of(
-                new NoResourceFoundException(HttpMethod.GET, rawPath),
+                new NoResourceFoundException(HttpMethod.GET, rawPath, rawPath),
                 new NoHandlerFoundException("GET", rawPath, HttpHeaders.EMPTY))) {
             var response = handler.handleMissingRoute(exception);
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
