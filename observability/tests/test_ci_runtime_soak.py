@@ -1,5 +1,6 @@
 """Exercise stability verdicts with a controlled clock, without Docker or live data."""
 import importlib.util
+import json
 from pathlib import Path
 import unittest
 import os
@@ -22,6 +23,22 @@ class RuntimeSoakTest(unittest.TestCase):
 
     def states(self):
         return [dict(id=str(i), running=True, oom=False, restarts=0, health="healthy") for i in range(10)]
+
+    def test_docker_states_with_and_without_optional_healthcheck(self):
+        rows = [{"id": str(i), "state": {"Running": True, "OOMKilled": False},
+                 "restarts": 0} for i in range(10)]
+        rows[0]["state"]["Health"] = {"Status": "healthy"}
+        parsed = GATE.parse_states("\n".join(json.dumps(row) for row in rows))
+        self.assertEqual("healthy", parsed[0]["health"])
+        self.assertEqual("none", parsed[1]["health"])
+        baseline = GATE.validate_states(parsed)
+        rows[0]["state"]["Health"]["Status"] = "unhealthy"
+        with self.assertRaises(RuntimeError):
+            GATE.validate_states(GATE.parse_states("\n".join(json.dumps(row) for row in rows)), baseline)
+        for malformed in [None, {}, {"Status": ""}]:
+            rows[0]["state"]["Health"] = malformed
+            with self.subTest(health=malformed), self.assertRaises((TypeError, KeyError, RuntimeError)):
+                GATE.validate_states(GATE.parse_states("\n".join(json.dumps(row) for row in rows)))
 
     def test_restart_oom_unhealthy_and_missing_container_fail_the_gate(self):
         baseline = GATE.validate_states(self.states())

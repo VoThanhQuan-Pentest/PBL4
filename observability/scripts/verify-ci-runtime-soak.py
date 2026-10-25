@@ -16,9 +16,21 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[2]
 GIB = 1024 ** 3
-STATE_FORMAT = ('{"id":"{{.Id}}","running":{{.State.Running}},'
-                '"oom":{{.State.OOMKilled}},"restarts":{{.RestartCount}},'
-                '"health":"{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}"}')
+# Serialize State as a whole: Docker's strict Go templates reject .State.Health
+# on services that intentionally have no HEALTHCHECK (for example Filebeat).
+STATE_FORMAT = ('{"id":"{{.Id}}","state":{{json .State}},'
+                '"restarts":{{.RestartCount}}}')
+
+
+def parse_states(output):
+    result = []
+    for line in output.splitlines():
+        row = json.loads(line)
+        state = row["state"]
+        health = state["Health"]["Status"] if "Health" in state else "none"
+        result.append({"id": row["id"], "running": state["Running"],
+                       "oom": state["OOMKilled"], "restarts": row["restarts"], "health": health})
+    return result
 
 
 def validate_states(states, baseline=None):
@@ -74,7 +86,7 @@ def main(output, seconds):
     def states():
         rows = subprocess.check_output(["docker", "inspect", "--format", STATE_FORMAT, *identifiers],
                                        text=True, timeout=15)
-        return [json.loads(row) for row in rows.splitlines()]
+        return parse_states(rows)
 
     baseline = validate_states(states())
     port = int(os.environ.get("LOCAL_LAB_WEB_PORT", "8088"))
