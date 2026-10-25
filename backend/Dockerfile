@@ -8,7 +8,7 @@ COPY src ./src
 # can request unavailable Jackson snapshots that are absent from the final tree.
 RUN MAVEN_OPTS="-Xmx512m -XX:ActiveProcessorCount=2" mvn -q -DskipTests package
 
-FROM eclipse-temurin:21-jre-jammy@sha256:d63bd8d9b171999cbed8576f2c76e874dd4856791a358536e5c4d407e77edc13
+FROM eclipse-temurin:21-jre-jammy@sha256:affcab5356e1270ac35d2361ee83135af2f03e8d580eca78a6d5d6fdbf048db0
 WORKDIR /app
 
 RUN apt-get update \

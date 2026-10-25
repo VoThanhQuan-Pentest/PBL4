@@ -60,6 +60,50 @@ probe() {
   curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8088/api/health | jq -e '.status=="UP"' >/dev/null
   curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8088/api/products | jq -e 'type=="object" or type=="array"' >/dev/null
 }
+# Test cookies stay in this private temporary directory and are never artifacts.
+session_probe() {
+  CI_SESSION_MODE="$1" CI_COOKIE_FILE="$temporary/session.cookies" python3 - <<'PY'
+import http.cookiejar, json, os, urllib.error, urllib.request
+mode = os.environ['CI_SESSION_MODE']
+jar = http.cookiejar.LWPCookieJar(os.environ['CI_COOKIE_FILE'])
+if mode == 'verify-candidate':
+    jar.load(ignore_discard=True, ignore_expires=True)
+client = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+def request(path, method='GET', body=None, csrf=None, expected=200):
+    headers = {'User-Agent': 'Flare-CI-Rollback-Session'}
+    if csrf is not None: headers['X-XSRF-TOKEN'] = csrf
+    if body is not None: headers['Content-Type'] = 'application/json'
+    req = urllib.request.Request('http://127.0.0.1:8088/api/' + path,
+        data=None if body is None else json.dumps(body).encode(), headers=headers, method=method)
+    try:
+        response = client.open(req, timeout=10)
+    except urllib.error.HTTPError as error:
+        if error.code == expected:
+            error.close()
+            return None
+        raise RuntimeError('Unexpected HTTP status in the isolated session probe') from None
+    with response:
+        if response.status != expected: raise RuntimeError('Unexpected session response status')
+        raw = response.read(65537)
+        if len(raw) > 65536: raise RuntimeError('Session response exceeded its size limit')
+        return json.loads(raw) if raw else None
+csrf = request('auth/csrf')['token']
+if mode in {'warmup', 'save-baseline'}:
+    # Public E2E fixtures only. Warm up any normal legacy-hash upgrade before
+    # the protected-state fingerprint, without changing the credential itself.
+    request('auth/login', 'POST', {'username': 'e2e_customer', 'password': 'CustomerE2E#1'}, csrf)
+if request('auth/me')['username'] != 'e2e_customer':
+    raise RuntimeError('Baseline session did not identify the expected synthetic customer')
+if mode == 'save-baseline':
+    jar.save(ignore_discard=True, ignore_expires=True)
+    os.chmod(jar.filename, 0o600)
+else:
+    csrf = request('auth/csrf')['token']
+    request('auth/logout', 'POST', {}, csrf, expected=204)
+    request('auth/me', expected=401)
+PY
+}
+session_probe warmup
 accounts_before=$(fingerprint_accounts)
 migrations_before=$(fingerprint_migrations)
 [[ "$accounts_before" =~ ^[0-9a-f]{64}$ && "$migrations_before" =~ ^[0-9a-f]{64}$ ]] || exit 1
@@ -68,9 +112,11 @@ changed=true
 compose -f "$temporary/baseline.yml" up --wait --wait-timeout 180 -d --no-deps \
   --force-recreate --no-build --pull never app
 probe
+session_probe save-baseline
 restore_candidate
 changed=false
 probe
+session_probe verify-candidate
 [[ "$(fingerprint_accounts)" == "$accounts_before" && "$(fingerprint_migrations)" == "$migrations_before" ]] || {
   printf 'Protected synthetic accounts or migration checksums changed.\n' >&2; exit 1;
 }
@@ -81,6 +127,7 @@ from pathlib import Path
 Path('observability/runtime/ci-rollback-result.json').write_text(json.dumps({
     'status': 'CI_BACKEND_ROLLBACK_PASS', 'baseline_sha': os.environ['baseline_sha'],
     'candidate_image': os.environ['candidate_image'], 'candidate_restored': True,
+    'baseline_session_reused_and_revoked_by_candidate': True,
     'account_and_migration_parity': True, 'database_restored': False,
     'gateway_downgraded': False, 'live_stack_modified': False}, indent=2) + '\n')
 PY

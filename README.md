@@ -23,11 +23,13 @@ nghiệm thu bên dưới. CI có tùy chọn `cold_cache` khi chạy thủ côn
 test image riêng và JavaFX được kiểm thử dưới Xvfb trước khi mở executable đã
 đóng gói ở 1366×768 và 1920×1080. Dependency audit và coverage vẫn là gate bắt buộc.
 
-Workflow **Observability runtime** có tùy chọn `run_soak`: kiểm tra restart,
+Workflow **CI** có tùy chọn chạy thủ công `runtime_validation`: kiểm tra restart,
 chuyển backend baseline/candidate tuần tự trên database tổng hợp rồi quan sát
 HTTP/container trong một giờ. Gate yêu cầu ít nhất 30 chu trình, không có OOM
 hoặc restart ngoài dự kiến, dự phòng 3 GiB RAM và 30 GiB ổ đĩa. Receipt này
 phân biệt rõ kiểm chứng ổn định ứng dụng với qualification model cố định.
+Gate chỉ chạy sau khi các job kiểm thử và security scan đạt. Workflow
+**Observability runtime** cũ giữ nguyên trạng thái bật/tắt trên GitHub.
 
 Bản SIEM/SOC R2 đã được triển khai và nghiệm thu chức năng trong lab:
 
@@ -284,7 +286,7 @@ và volume không đụng nhau.
 
 ## Phát triển frontend
 
-Yêu cầu Node.js 22 và backend đang chạy ở port `8080`, hoặc đặt
+Yêu cầu Node.js 22.23.4 và backend đang chạy ở port `8080`, hoặc đặt
 `VITE_API_PROXY_TARGET` đến backend phù hợp.
 
 ```bash
