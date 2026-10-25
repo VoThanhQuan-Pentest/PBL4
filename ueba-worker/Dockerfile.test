@@ -3,7 +3,15 @@
 FROM flare-ueba-worker:local
 USER 0:0
 COPY requirements-test.lock /tmp/requirements-test.lock
-RUN pip install --disable-pip-version-check --no-cache-dir --only-binary=:all: -r /tmp/requirements-test.lock
+# The serving image intentionally has no installer. Bootstrap only in this
+# disposable test image; never add pytest/pip to the serving image.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3.12-venv \
+    && python -m ensurepip --upgrade \
+    && python -m pip install --disable-pip-version-check --no-cache-dir --only-binary=:all: pip==26.2.2 \
+    && python -m pip install --disable-pip-version-check --no-cache-dir --only-binary=:all: -r /tmp/requirements-test.lock \
+    && python -m pip check \
+    && rm -rf /var/lib/apt/lists/*
 USER 1000:1000
 ENV PYTHONDONTWRITEBYTECODE=1
 ENTRYPOINT ["python"]
