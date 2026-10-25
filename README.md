@@ -30,7 +30,7 @@ hoặc restart ngoài dự kiến, dự phòng 3 GiB RAM và 30 GiB ổ đĩa. R
 phân biệt rõ kiểm chứng ổn định ứng dụng với qualification model cố định.
 Gate chỉ chạy sau khi các job kiểm thử và security scan đạt. Workflow
 **Observability runtime** cũ giữ nguyên trạng thái bật/tắt trên GitHub.
-Base image candidate dùng Nginx 1.30.6 Alpine slim và Python 3.12 Debian 13;
+Base image candidate dùng Nginx 1.30.6 Alpine slim và Python 3.12 trên Ubuntu 24.04 LTS;
 dependency lock của worker, model và input contract được giữ nguyên. Các kiểm
 tra tương thích worker vẫn bắt buộc trước khi chuyển bản vào lab.
 
