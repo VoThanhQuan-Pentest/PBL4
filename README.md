@@ -23,6 +23,12 @@ nghiệm thu bên dưới. CI có tùy chọn `cold_cache` khi chạy thủ côn
 test image riêng và JavaFX được kiểm thử dưới Xvfb trước khi mở executable đã
 đóng gói ở 1366×768 và 1920×1080. Dependency audit và coverage vẫn là gate bắt buộc.
 
+Workflow **Observability runtime** có tùy chọn `run_soak`: kiểm tra restart,
+chuyển backend baseline/candidate tuần tự trên database tổng hợp rồi quan sát
+HTTP/container trong một giờ. Gate yêu cầu ít nhất 30 chu trình, không có OOM
+hoặc restart ngoài dự kiến, dự phòng 3 GiB RAM và 30 GiB ổ đĩa. Receipt này
+phân biệt rõ kiểm chứng ổn định ứng dụng với qualification model cố định.
+
 Bản SIEM/SOC R2 đã được triển khai và nghiệm thu chức năng trong lab:
 
 - Một stack `flare-otp-local` phục vụ website, SOC và pipeline ELK, giữ nguyên

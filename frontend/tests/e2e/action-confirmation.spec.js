@@ -52,7 +52,8 @@ test('shows current-mailbox confirmation, freezes payload and supports keyboard 
   await expect(page.locator('#status')).toHaveText('COMMITTED');
   const executions = await page.evaluate(() => window.calls.filter(c => c.path.endsWith('/execute')));
   expect(executions).toHaveLength(1);
-  expect(executions[0].body).toEqual({ confirmation_code: '222222', destination_otp_code: '111111' });
+  expect(executions[0].body).toEqual({ confirmation_code: '222222', destination_otp_code: '111111',
+    request_id: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/) });
   await expect(page.locator('section')).toHaveCount(0);
 });
 

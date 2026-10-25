@@ -102,7 +102,8 @@ for (const operation of ['EMAIL_CHANGE', 'PASSWORD_CHANGE']) {
     expect(app.executions()).toHaveLength(1);
     expect(app.requests.filter(r => r.method === 'PUT')).toHaveLength(0);
     expect(app.preparations()[0].body.operation).toBe(operation);
-    expect(app.executions()[0].body).toEqual({ confirmation_code: '222222', destination_otp_code: operation === 'EMAIL_CHANGE' ? '111111' : '' });
+    expect(app.executions()[0].body).toEqual({ confirmation_code: '222222', destination_otp_code: operation === 'EMAIL_CHANGE' ? '111111' : '',
+      request_id: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/) });
     if (operation === 'PASSWORD_CHANGE') {
       await expect(page.locator('#login-overlay')).toBeVisible();
       await expect(page.locator('#current-password')).toHaveValue('');

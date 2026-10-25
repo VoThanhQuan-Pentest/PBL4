@@ -4,7 +4,7 @@ COPY --from=decision_jre /opt/java/openjdk /opt/java/openjdk
 ENV JAVA_HOME=/opt/java/openjdk
 ENV PATH="/opt/java/openjdk/bin:${PATH}"
 WORKDIR /service
-COPY requirements.txt requirements.lock .
+COPY requirements.txt requirements.lock ./
 RUN pip install --disable-pip-version-check --no-cache-dir --only-binary=:all: -r requirements.lock \
     && useradd --system --uid 10001 --create-home ueba
 COPY app ./app
