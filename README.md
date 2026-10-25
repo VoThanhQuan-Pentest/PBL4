@@ -16,6 +16,13 @@ liệu nghiệp vụ và Redis cho token, OTP, rate limit cùng trạng thái ng
 
 ## Trạng thái bản local — 25/10/2026
 
+Source trên nhánh R2 đang được nâng nền ngày 26/10: Java 21, Spring Boot 4.1.2,
+Connector/J 26.10.0 và Jackson 2 compatibility để giữ API hiện tại. Đây là
+candidate đang kiểm chứng CI; các phiên bản này chưa thay thế stack local đã
+nghiệm thu bên dưới. CI có tùy chọn `cold_cache` khi chạy thủ công, worker dùng
+test image riêng và JavaFX được kiểm thử dưới Xvfb trước khi mở executable đã
+đóng gói ở 1366×768 và 1920×1080. Dependency audit và coverage vẫn là gate bắt buộc.
+
 Bản SIEM/SOC R2 đã được triển khai và nghiệm thu chức năng trong lab:
 
 - Một stack `flare-otp-local` phục vụ website, SOC và pipeline ELK, giữ nguyên
@@ -176,7 +183,7 @@ Luồng chính:
 | Frontend | Vite 6, HTML, CSS, JavaScript ES modules | Giao diện người dùng và admin |
 | Desktop | JavaFX 21, FXML, CSS, Java HttpClient | Client SIEM cho security analyst |
 | Edge | Nginx stable Alpine | Static hosting, reverse proxy, header và access log |
-| Backend | Java 21, Spring Boot 3.5 | REST API và nghiệp vụ |
+| Backend | Java 21, Spring Boot 4.1.2 | REST API và nghiệp vụ |
 | Security | Spring Security, JWT, BCrypt-SHA256, CSRF | Xác thực và phân quyền |
 | Database | MySQL 8.4, Spring Data JPA, Flyway | Dữ liệu nghiệp vụ và migration |
 | Cache/state | Redis 7 | Token, OTP, rate limit và state ngắn hạn |

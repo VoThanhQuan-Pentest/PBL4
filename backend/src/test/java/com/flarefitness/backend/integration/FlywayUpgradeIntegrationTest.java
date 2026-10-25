@@ -49,7 +49,7 @@ class FlywayUpgradeIntegrationTest {
             Flyway latestFlyway = flyway(mysql, null);
             latestFlyway.migrate();
 
-            assertThat(latestFlyway.info().current().getVersion().getVersion()).isEqualTo("41");
+            assertThat(latestFlyway.info().current().getVersion().getVersion()).isEqualTo("42");
             try (Connection connection = connection(mysql)) {
                 try (var statement = connection.createStatement()) {
                     statement.executeUpdate("INSERT INTO tbl_khach_hang (id,ten_khach,sdt) VALUES "

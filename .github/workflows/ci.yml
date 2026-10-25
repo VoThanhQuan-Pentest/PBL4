@@ -4,6 +4,11 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      cold_cache:
+        description: Rebuild without dependency or Docker build caches
+        type: boolean
+        default: false
 
 # Every third-party action below is pinned to a full commit SHA. Renovate keeps
 # these pins current; do not replace them with a mutable tag.
@@ -19,6 +24,7 @@ jobs:
     name: Review dependency changes
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - name: Check out source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -30,6 +36,7 @@ jobs:
   frontend:
     name: Frontend checks
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: frontend
@@ -39,8 +46,8 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: '22'
-          cache: npm
+          node-version: '22.23.4'
+          cache: ${{ inputs.cold_cache != true && 'npm' || '' }}
           cache-dependency-path: frontend/package-lock.json
       - name: Install locked dependencies
         run: npm ci
@@ -62,6 +69,7 @@ jobs:
   backend:
     name: Backend tests and migration integration tests
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: backend
@@ -73,7 +81,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-          cache: maven
+          cache: ${{ inputs.cold_cache != true && 'maven' || '' }}
       - name: Run tests
         run: mvn -B -ntp verify
       - name: Upload backend coverage report
@@ -88,6 +96,7 @@ jobs:
   desktop-client:
     name: JavaFX SIEM client
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: desktop-client
@@ -99,44 +108,51 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-          cache: maven
-      - name: Run client tests
-        run: mvn -B -ntp verify
+          cache: ${{ inputs.cold_cache != true && 'maven' || '' }}
       - name: Install headless display runtime
-        run: sudo apt-get update && sudo apt-get install -y xvfb
-      - name: Render SOC dashboard and five charts under Xvfb
-        run: xvfb-run -a -s '-screen 0 1600x1600x24' mvn -B -ntp -Dtest=DashboardFxmlSmokeTest test
-      - name: Smoke-test the JavaFX scene graph
+        run: sudo apt-get update && sudo apt-get install -y xvfb xdotool
+      - name: Test and package the Linux application under Xvfb
+        id: package
+        run: xvfb-run -a -s '-screen 0 1920x1080x24' ./scripts/package-linux.sh
+      - name: Smoke-test the packaged executable at laptop and desktop sizes
+        env:
+          APPLICATION_IMAGE: ${{ steps.package.outputs.application_image }}
         run: |
-          set +e
-          xvfb-run -a timeout 12s mvn -q javafx:run
-          status=$?
-          set -e
-          test "$status" -eq 124
-      - name: Build Linux application image
-        run: ./scripts/package-linux.sh
+          xvfb-run -a -s '-screen 0 1366x768x24' ./scripts/smoke-linux.sh "$APPLICATION_IMAGE"
+          xvfb-run -a -s '-screen 0 1920x1080x24' ./scripts/smoke-linux.sh "$APPLICATION_IMAGE"
+      - name: Upload the tested application image
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: flare-soc-linux-${{ github.sha }}
+          path: ${{ steps.package.outputs.application_image }}
+          if-no-files-found: error
+          retention-days: 14
 
   prevention-gateway:
     name: Coraza prevention gateway
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - name: Check out source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Build gateway image and run its rule/proxy tests
-        run: docker build --pull=false --tag flare-prevention-gateway:ci gateway
+        run: docker build ${{ inputs.cold_cache && '--no-cache' || '' }} --pull=false --tag flare-prevention-gateway:ci gateway
 
   ueba-worker:
     name: UEBA worker and cross-language contract
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - name: Check out source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Build pinned worker image
-        run: docker build --pull=false --tag flare-ueba-worker:local ueba-worker
+        run: docker build ${{ inputs.cold_cache && '--no-cache' || '' }} --pull=false --tag flare-ueba-worker:local ueba-worker
+      - name: Build the separate worker test image
+        run: docker build --file ueba-worker/Dockerfile.test --tag flare-ueba-worker:test ueba-worker
       - name: Test real worker HTTP, model lifecycle and body limit
         # Cross-repo frozen-protocol tests read these source trees by absolute path.
         # Mount only required code, read-only; never expose observability runtime/secrets.
-        # Run as the checkout owner; group 1000 lets tests exercise private package group checks.
+        # The package format requires UID/GID 1000; chown only this disposable copy.
         run: |
           set -Eeuo pipefail
           test_workspace="$(mktemp -d)"
@@ -144,8 +160,11 @@ jobs:
           cp -R ueba-worker/app "$test_workspace/ueba-worker/"
           cp -R backend/src "$test_workspace/backend/"
           cp -R observability/scripts "$test_workspace/observability/"
+          trap 'sudo rm -rf -- "$test_workspace"' EXIT
+          docker run --rm --network none --user 0:0 -v "$test_workspace:/workspace" \
+            --entrypoint chown flare-ueba-worker:test -R 1000:1000 /workspace
           docker run --rm --network none \
-            --user "$(id -u):$(id -g)" --group-add 1000 \
+            --user 1000:1000 \
             -v "$PWD/ueba-worker:/code:ro" \
             -v "$PWD/ueba-worker/app:/ueba-worker/app:ro" \
             -v "$PWD/backend/src:/backend/src:ro" \
@@ -153,8 +172,8 @@ jobs:
             -v "$test_workspace:/workspace:ro" \
             -w /code -e PYTHONPATH=/code \
             -e UEBA_RECOVERY_PROJECT_ROOT=/workspace \
-            --entrypoint python flare-ueba-worker:local \
-          -m unittest discover -s tests -v
+            --entrypoint python flare-ueba-worker:test \
+          -m pytest -p no:cacheprovider tests -v
       - name: Test deterministic local demo generator
         run: python3 -m unittest discover -s observability/tests -p 'test_seed_ueba_demo.py' -v
       - name: Set up Java
@@ -162,7 +181,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-          cache: maven
+          cache: ${{ inputs.cold_cache != true && 'maven' || '' }}
           cache-dependency-path: backend/pom.xml
       - name: Test Spring-to-Python scoring with isolated MySQL and Redis
         working-directory: backend
@@ -194,7 +213,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-          cache: maven
+          cache: ${{ inputs.cold_cache != true && 'maven' || '' }}
       - name: Build the daily Dependency-Check cache key
         if: env.TRUSTED_NVD_AUDIT == 'true'
         id: dependency-check-cache-key
@@ -247,6 +266,7 @@ jobs:
   edge-security:
     name: Nginx configuration and header hardening
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - name: Check out source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -270,6 +290,7 @@ jobs:
   observability-config:
     name: Observability configuration
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     env:
       COMPOSE_PROJECT_NAME: pbl4-observability-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
@@ -323,6 +344,7 @@ jobs:
   terraform:
     name: Terraform formatting, validation and IaC scan
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: terraform
@@ -363,8 +385,8 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: '22'
-          cache: npm
+          node-version: '22.23.4'
+          cache: ${{ inputs.cold_cache != true && 'npm' || '' }}
           cache-dependency-path: frontend/package-lock.json
       - name: Install locked frontend dependencies
         working-directory: frontend
@@ -412,15 +434,16 @@ jobs:
     name: Container, filesystem, and SBOM checks
     needs: [frontend, backend, ueba-worker]
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - name: Check out source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Build backend image
-        run: docker build --pull=false --tag flarefitness-backend:ci backend
+        run: docker build ${{ inputs.cold_cache && '--no-cache' || '' }} --pull=false --tag flarefitness-backend:ci backend
       - name: Build edge image
-        run: docker build --pull=false --tag flarefitness-nginx:ci --file nginx/Dockerfile .
+        run: docker build ${{ inputs.cold_cache && '--no-cache' || '' }} --pull=false --tag flarefitness-nginx:ci --file nginx/Dockerfile .
       - name: Build UEBA worker image
-        run: docker build --pull=false --tag flare-ueba-worker:ci ueba-worker
+        run: docker build ${{ inputs.cold_cache && '--no-cache' || '' }} --pull=false --tag flare-ueba-worker:ci ueba-worker
       - name: Scan repository dependencies, secrets, and configuration
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:

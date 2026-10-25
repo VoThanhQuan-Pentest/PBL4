@@ -3,7 +3,10 @@ import {
   getCacheStorage,
   isPrivateCacheKey,
   purgeLegacySensitiveLocalStorage,
+  readCacheValue,
   readJsonCache,
+  removeCacheValue,
+  writeCacheValue,
   writeJsonCache
 } from './browser-cache.js';
 
@@ -39,6 +42,28 @@ function createStorages() {
 }
 
 describe('browser cache boundary', () => {
+  it('fails safely on denied storage, malformed JSON, missing values and cycles', () => {
+    const storages = createStorages();
+    expect(readCacheValue('missing', 'fallback', storages)).toBe('fallback');
+    expect(readJsonCache('missing', [], storages)).toEqual([]);
+    storages.localStorage.setItem('bad', '{');
+    expect(readJsonCache('bad', 'fallback', storages)).toBe('fallback');
+    const cycle = {}; cycle.self = cycle;
+    expect(writeJsonCache('bad', cycle, storages)).toBe(false);
+    const denied = { getItem() { throw new Error('denied'); }, setItem() { throw new Error('quota'); },
+      removeItem() { throw new Error('denied'); } };
+    const unavailable = { localStorage: denied, sessionStorage: denied };
+    expect(readCacheValue('public', 'fallback', unavailable)).toBe('fallback');
+    expect(writeCacheValue('public', 'x', unavailable)).toBe(false);
+    expect(removeCacheValue('public', unavailable)).toBe(false);
+    expect(readCacheValue('public', 'fallback', {})).toBe('fallback');
+    expect(removeCacheValue('public', {})).toBe(true);
+    expect(removeCacheValue('bad', storages)).toBe(true);
+    expect(storages.localStorage.getItem('bad')).toBeNull();
+    expect(purgeLegacySensitiveLocalStorage({})).toEqual([]);
+    expect(purgeLegacySensitiveLocalStorage({ localStorage: { length: 1, key: () => null } })).toEqual([]);
+    expect(isPrivateCacheKey(null)).toBe(false);
+  });
   it('keeps identity, PII, support, orders and entitlements out of localStorage', () => {
     for (const key of [
       'pbl3_address_book_user-1',

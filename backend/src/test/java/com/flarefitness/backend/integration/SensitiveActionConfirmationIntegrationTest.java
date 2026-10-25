@@ -196,7 +196,10 @@ class SensitiveActionConfirmationIntegrationTest extends ContainerizedIntegratio
     }
 
     User fixture(String id) {
-        String email = id + "@example.test";
+        // The superclass tests also run in the dependency-fault subclass.
+        // Reset only this fixture's proof rows and use a fresh verified mailbox.
+        jdbc.update("DELETE FROM sensitive_action_confirmations WHERE user_id=?", id);
+        String email = id + "-" + java.util.UUID.randomUUID() + "@example.test";
         otp.sendOtp(EmailOtpService.PURPOSE_REGISTER, email);
         otp.verifyOtp(EmailOtpService.PURPOSE_REGISTER, email, delivered.get(email));
         User user = new User(); user.setId(id); user.setUsername(id); user.setEmail(email);

@@ -7,6 +7,14 @@ cd "$ROOT_DIR"
 command -v mvn >/dev/null 2>&1 || { printf 'Maven is required.\n' >&2; exit 1; }
 command -v jpackage >/dev/null 2>&1 || { printf 'A JDK with jpackage is required.\n' >&2; exit 1; }
 
+maven_options=()
+case "${1:-}" in
+  '') ;;
+  --offline) maven_options+=(-o) ;;
+  *) printf 'Usage: %s [--offline]\n' "$0" >&2; exit 2 ;;
+esac
+[ "$#" -le 1 ] || { printf 'Too many arguments.\n' >&2; exit 2; }
+
 if [ -L target ]; then
   printf 'Refusing a symlinked package output directory.\n' >&2
   exit 2
@@ -27,7 +35,7 @@ trap cleanup EXIT
 # Build in an isolated copy: Maven's clean phase must not erase a previous
 # desktop-client/target/dist package or other user-owned build output.
 cp -a pom.xml src "$build_root/"
-mvn -B -ntp -o -f "$build_root/pom.xml" clean package
+mvn -B -ntp "${maven_options[@]}" -f "$build_root/pom.xml" clean verify
 input_dir="$build_root/target/package-input"
 install -d -m 0700 "$input_dir"
 cp "$build_root/target/flare-security-monitor-0.1.0-SNAPSHOT.jar" "$input_dir/"
@@ -45,3 +53,6 @@ jpackage \
   --main-class com.flarefitness.monitor.Launcher
 
 printf 'Linux application image: %s\n' "$output_root/FlareSecurityMonitor"
+if [ -n "${GITHUB_OUTPUT:-}" ]; then
+  printf 'application_image=%s\n' "$output_root/FlareSecurityMonitor" >> "$GITHUB_OUTPUT"
+fi

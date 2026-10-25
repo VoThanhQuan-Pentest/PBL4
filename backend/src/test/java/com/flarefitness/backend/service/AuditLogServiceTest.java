@@ -15,10 +15,13 @@ class AuditLogServiceTest {
 
     private Logger auditLogger;
     private ListAppender<ILoggingEvent> appender;
+    private ch.qos.logback.classic.Level previousLevel;
 
     @BeforeEach
     void setUp() {
         auditLogger = (Logger) LoggerFactory.getLogger("AUDIT");
+        previousLevel = auditLogger.getLevel();
+        auditLogger.setLevel(ch.qos.logback.classic.Level.INFO);
         appender = new ListAppender<>();
         appender.start();
         auditLogger.addAppender(appender);
@@ -29,6 +32,7 @@ class AuditLogServiceTest {
         MDC.clear();
         auditLogger.detachAppender(appender);
         appender.stop();
+        auditLogger.setLevel(previousLevel);
     }
 
     @Test

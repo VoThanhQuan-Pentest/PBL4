@@ -18,7 +18,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -28,7 +28,7 @@ class SiemSignatureLifecycleIntegrationTest extends ContainerizedIntegrationTest
     @Autowired private SiemPreventionService prevention;
     @Autowired private UserRepository users;
     @Autowired private PasswordEncoder passwords;
-    @MockBean private SiemPreventionGateway gateway;
+    @MockitoBean private SiemPreventionGateway gateway;
 
     @Test
     void signatureBecomesActiveOnlyAfterPassingTestAndGatewayAcknowledgement() throws Exception {

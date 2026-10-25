@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -62,6 +63,20 @@ class QualifiedCandidateInstallerTest(unittest.TestCase):
             path.chmod(0o640)
             os.chown(path, os.geteuid(), 1000)
             self.assertEqual(path, INSTALLER.package_file(path, 1024))
+            link = directory / "linked.json"
+            link.symlink_to(path)
+            with self.assertRaises(ValueError):
+                INSTALLER.package_file(link, 1024)
+            link.unlink()
+            os.link(path, link)
+            with self.assertRaises(ValueError):
+                INSTALLER.package_file(path, 1024)
+            link.unlink()
+            original = path.lstat()
+            invalid_owner = os.stat_result(tuple(original)[:4] + (1001,) + tuple(original)[5:])
+            with patch.object(Path, "lstat", return_value=invalid_owner):
+                with self.assertRaises(ValueError):
+                    INSTALLER.package_file(path, 1024)
             os.chmod(path, 0o644)
             with self.assertRaises(ValueError):
                 INSTALLER.package_file(path, 1024)

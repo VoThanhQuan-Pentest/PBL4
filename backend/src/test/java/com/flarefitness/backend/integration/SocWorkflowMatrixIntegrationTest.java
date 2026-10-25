@@ -13,6 +13,7 @@ import com.flarefitness.backend.repository.siem.SiemIncidentRepository;
 import com.flarefitness.backend.repository.siem.SiemResponseActionRepository;
 import com.flarefitness.backend.security.CurrentUserPrincipal;
 import com.flarefitness.backend.service.siem.SiemIncidentService;
+import com.flarefitness.backend.service.siem.SiemContainmentService;
 import com.flarefitness.backend.service.siem.SiemResponseActionService;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -38,6 +39,7 @@ class SocWorkflowMatrixIntegrationTest extends ContainerizedIntegrationTest {
     @Autowired private SiemResponseActionRepository actions;
     @Autowired private SiemIncidentService workflow;
     @Autowired private SiemResponseActionService responses;
+    @Autowired private SiemContainmentService containment;
 
     enum Path { CLAIM, ESCALATE, CLOSE_TP, CLOSE_FP, RETURN, FORBIDDEN, STALE, COMPETING_CLAIM, SESSION_IDEMPOTENT, REOPEN }
 
@@ -78,10 +80,12 @@ class SocWorkflowMatrixIntegrationTest extends ContainerizedIntegrationTest {
                 transition(incident, SiemDtos.TransitionAction.ESCALATE, l1, reason, null);
                 transition(incident, SiemDtos.TransitionAction.CLAIM, l2, null, null);
                 IncidentConclusion conclusion = path == Path.CLOSE_TP ? IncidentConclusion.TRUE_POSITIVE : IncidentConclusion.FALSE_POSITIVE;
+                if (path == Path.CLOSE_TP) verifyNoResponseRequired(incident, l2, reason);
                 var result = transition(incident, SiemDtos.TransitionAction.CLOSE, l2, reason, conclusion);
                 assertThat(result.status()).isEqualTo(IncidentStatus.CLOSED); assertThat(result.conclusion()).isEqualTo(conclusion);
                 assertThat(result.assigneeUserId()).isEqualTo(l2.getId());
-                assertActions(incident, "CLAIM", "ESCALATE", "CLAIM", "CLOSE");
+                if (path == Path.CLOSE_TP) assertActions(incident, "CLAIM", "ESCALATE", "CLAIM", "RESPONSE_RECOVERY_VERIFIED", "CLOSE");
+                else assertActions(incident, "CLAIM", "ESCALATE", "CLAIM", "CLOSE");
             }
             case RETURN -> {
                 transition(incident, SiemDtos.TransitionAction.CLAIM, l2, null, null);
@@ -125,13 +129,23 @@ class SocWorkflowMatrixIntegrationTest extends ContainerizedIntegrationTest {
                 transition(incident, SiemDtos.TransitionAction.CLAIM, l1, null, null);
                 transition(incident, SiemDtos.TransitionAction.ESCALATE, l1, reason, null);
                 transition(incident, SiemDtos.TransitionAction.CLAIM, l2, null, null);
+                verifyNoResponseRequired(incident, l2, reason);
                 transition(incident, SiemDtos.TransitionAction.CLOSE, l2, reason, IncidentConclusion.TRUE_POSITIVE);
                 var result = transition(incident, SiemDtos.TransitionAction.REOPEN, l2, reason, null);
                 assertThat(result.status()).isEqualTo(IncidentStatus.NEW); assertThat(result.assigneeUserId()).isNull();
                 assertThat(result.conclusion()).isEqualTo(IncidentConclusion.UNREVIEWED);
-                assertActions(incident, "CLAIM", "ESCALATE", "CLAIM", "CLOSE", "REOPEN");
+                assertActions(incident, "CLAIM", "ESCALATE", "CLAIM", "RESPONSE_RECOVERY_VERIFIED", "CLOSE", "REOPEN");
             }
         }
+    }
+
+    private void verifyNoResponseRequired(SiemIncident incident, User analyst, String reason) {
+        long version = incidents.findById(incident.getId()).orElseThrow().getVersion();
+        assertThatThrownBy(() -> transition(incident, SiemDtos.TransitionAction.CLOSE, analyst,
+                reason, IncidentConclusion.TRUE_POSITIVE)).isInstanceOf(ConflictException.class);
+        containment.verify(incident.getId(), new SiemContainmentService.Verification(
+                java.util.UUID.randomUUID().toString(), version,
+                "Workflow-only fixture has no containment action requiring recovery.", "NOT_REQUIRED", "NOT_REQUIRED"), auth(analyst));
     }
 
     private SiemDtos.Incident transition(SiemIncident incident, SiemDtos.TransitionAction action, User actor, String reason, IncidentConclusion conclusion) {

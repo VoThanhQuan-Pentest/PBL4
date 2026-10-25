@@ -1,6 +1,11 @@
 package com.flarefitness.backend.integration;
 
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.env.Environment;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ScanOptions;
 import org.junit.jupiter.api.TestInstance;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -10,6 +15,9 @@ import org.testcontainers.utility.DockerImageName;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public abstract class ContainerizedIntegrationTest {
+
+    @Autowired(required = false) private Environment testEnvironment;
+    @Autowired(required = false) private StringRedisTemplate testRedis;
 
     private static final MySQLContainer<?> MYSQL = new MySQLContainer<>(DockerImageName
             .parse("mysql:8.4@sha256:c831a0f11348d402b43d77453e17d770be2eef356615a2823fe0f5a0d6c8b9af")
@@ -52,6 +60,14 @@ public abstract class ContainerizedIntegrationTest {
 
     @DynamicPropertySource
     static void configureProperties(DynamicPropertyRegistry registry) {
+        // Suppliers must return the same value throughout one context's life.
+        String namespace = "ci:" + java.util.UUID.randomUUID() + ":";
+        registry.add("flare.test.redis-namespace", () -> namespace);
+        for (String property : java.util.List.of("app.security.token-prefix", "app.security.user-token-prefix",
+                "app.security.login-attempt-prefix", "app.security.password-reset-token-prefix",
+                "app.otp.redis-prefix", "app.cache.product-prefix", "app.cache.recommendation-prefix")) {
+            registry.add(property, () -> namespace + property + ":");
+        }
         registry.add("spring.datasource.url", MYSQL::getJdbcUrl);
         registry.add("spring.datasource.username", MYSQL::getUsername);
         registry.add("spring.datasource.password", MYSQL::getPassword);
@@ -63,6 +79,21 @@ public abstract class ContainerizedIntegrationTest {
         registry.add("spring.mail.username", () -> mailSetting("APP_MAIL_USERNAME", "test@flarefitness.local"));
         registry.add("spring.mail.password", () -> mailSetting("APP_MAIL_PASSWORD", "not-used-in-tests"));
         registry.add("app.security.auth-cookie-secure", () -> "false");
+    }
+
+    @BeforeEach
+    void clearOnlyOwnedRedisFixtures() {
+        if (testRedis == null || testEnvironment == null) return;
+        String namespace = testEnvironment.getRequiredProperty("flare.test.redis-namespace");
+        if (!namespace.matches("ci:[0-9a-f-]{36}:")) throw new IllegalStateException("Unsafe test namespace");
+        try (var cursor = testRedis.scan(ScanOptions.scanOptions().match(namespace + "*").count(100).build())) {
+            var batch = new java.util.ArrayList<String>(100);
+            while (cursor.hasNext()) {
+                batch.add(cursor.next());
+                if (batch.size() == 100) { testRedis.delete(batch); batch.clear(); }
+            }
+            if (!batch.isEmpty()) testRedis.delete(batch);
+        }
     }
 
     @BeforeAll

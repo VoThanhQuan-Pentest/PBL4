@@ -58,6 +58,9 @@ class FakeKibana(BaseHTTPRequestHandler):
 
 class KibanaPreimportBackupTest(unittest.TestCase):
     def setUp(self):
+        # A clean checkout has no ignored runtime directory. Each test owns
+        # only its UUID child; never depend on an earlier backup creating it.
+        RUNTIME.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.temporary = tempfile.TemporaryDirectory()
         secret_dir = Path(self.temporary.name) / "monitor"
         secret_dir.mkdir()

@@ -19,7 +19,7 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
-@org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc
+@org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 @SpringBootTest(properties={"app.security.login.max-attempts-per-minute=100","app.security.login.max-account-attempts-per-minute=100"})
 class SiemContainmentIntegrationTest extends ContainerizedIntegrationTest {
     @Autowired SiemContainmentService containment;

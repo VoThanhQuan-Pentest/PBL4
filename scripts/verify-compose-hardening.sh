@@ -140,7 +140,7 @@ assert_aws_bind_mount_permissions() {
   esac
   # shellcheck disable=SC2016
   case "$web_deploy" in
-    *'sudo mv /tmp/flare-web-certs "$certs_next"'*'sudo openssl verify -CAfile "$certs_next/ca.crt"'*'sudo mv "$certs_target" "$certs_previous"'*'sudo mv "$certs_next" "$certs_target"'*'--force-recreate --no-deps filebeat'*'filebeat test output'*) ;;
+    *'sudo mv "$staging/web" "$certs_next"'*'sudo openssl verify -CAfile "$certs_next/ca.crt"'*'sudo mv "$certs_target" "$certs_previous"'*'sudo mv "$certs_next" "$certs_target"'*'--force-recreate --no-deps app filebeat'*'filebeat test output'*) ;;
     *) fail 'Web deploy must validate and replace the exact Filebeat certificate bundle, recreate Filebeat and test its output.' ;;
   esac
 

@@ -1,0 +1,10 @@
+# The runtime image is built from its pinned Dockerfile in the same CI job.
+# Keep pytest and its dependencies out of the serving image.
+FROM flare-ueba-worker:local
+USER 0:0
+COPY requirements-test.lock /tmp/requirements-test.lock
+RUN pip install --disable-pip-version-check --no-cache-dir --only-binary=:all: -r /tmp/requirements-test.lock
+USER 1000:1000
+ENV PYTHONDONTWRITEBYTECODE=1
+ENTRYPOINT ["python"]
+CMD ["-m", "pytest", "-p", "no:cacheprovider", "tests", "-v"]
