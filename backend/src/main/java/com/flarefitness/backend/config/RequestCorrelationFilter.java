@@ -27,6 +27,7 @@ public class RequestCorrelationFilter extends OncePerRequestFilter {
             HttpServletResponse response,
             FilterChain filterChain
     ) throws ServletException, IOException {
+        request.setAttribute(com.flarefitness.backend.service.siem.SiemAuthTelemetry.REQUEST_ID,UUID.randomUUID().toString());
         String requested = request.getHeader(HEADER);
         String traceId = requested != null && SAFE_REQUEST_ID.matcher(requested).matches()
                 ? requested

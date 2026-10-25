@@ -22,6 +22,7 @@ import com.flarefitness.backend.security.PasswordResetTokenStore;
 import com.flarefitness.backend.security.PasswordPolicy;
 import com.flarefitness.backend.security.RedisTokenStore;
 import com.flarefitness.backend.exception.TooManyRequestsException;
+import com.flarefitness.backend.service.siem.SecurityEventService;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.Locale;
@@ -60,6 +61,7 @@ public class AuthService {
     private final PasswordResetTokenStore passwordResetTokenStore;
     private final PasswordPolicy passwordPolicy;
     private final AuditLogService auditLogService;
+    private final SecurityEventService securityEventService;
 
     public AuthService(
             UserRepository userRepository,
@@ -72,7 +74,8 @@ public class AuthService {
             PhoneNumberService phoneNumberService,
             PasswordResetTokenStore passwordResetTokenStore,
             PasswordPolicy passwordPolicy,
-            AuditLogService auditLogService
+            AuditLogService auditLogService,
+            SecurityEventService securityEventService
     ) {
         this.userRepository = userRepository;
         this.customerRepository = customerRepository;
@@ -85,35 +88,56 @@ public class AuthService {
         this.passwordResetTokenStore = passwordResetTokenStore;
         this.passwordPolicy = passwordPolicy;
         this.auditLogService = auditLogService;
+        this.securityEventService = securityEventService;
     }
 
     public LoginResponse login(LoginRequest request, String ipAddress) {
+        return login(request, ipAddress, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    private com.flarefitness.backend.service.siem.SiemAuthTelemetry authTelemetry;
+
+    public LoginResponse login(LoginRequest request, String ipAddress, String userAgent) {
         String username = normalizeUsername(request.username());
+        if(authTelemetry!=null)authTelemetry.loginTarget(username);
         try {
             ipRateLimitService.assertLoginAllowed(ipAddress, username);
         } catch (TooManyRequestsException exception) {
             auditLogService.failure("AUTH_LOGIN", null, null, "USER", null);
+            recordLoginSecurityEvent("RATE_LIMITED", null, null, ipAddress, userAgent);
             throw exception;
         }
 
         Optional<User> foundUser = userRepository.findByUsernameIgnoreCase(username);
         if (foundUser.isEmpty()) {
             consumeDummyLoginPasswordWork();
-            throw invalidCredentials(null);
+            throw invalidCredentials(null, ipAddress, userAgent);
         }
         User user = foundUser.get();
 
         if (!passwordMatches(request.password(), user)) {
-            throw invalidCredentials(user.getId());
+            throw invalidCredentials(user.getId(), ipAddress, userAgent);
         }
 
-        if (!new CurrentUserPrincipal(user).isEnabled()) {
-            throw invalidCredentials(user.getId());
+        if (!new CurrentUserPrincipal(user).isEnabled() || !new CurrentUserPrincipal(user).isAccountNonLocked()) {
+            throw invalidCredentials(user.getId(), ipAddress, userAgent);
         }
 
         ipRateLimitService.recordSuccessfulLogin(ipAddress, username);
         LoginResponse response = issueLoginResponse(user);
         auditLogService.success("AUTH_LOGIN", user.getId(), user.getId(), "USER", user.getId());
+        if (securityEventService.isPostLoginEnabled()) {
+            try {
+                securityEventService.recordSuccessfulLogin(user.getId(), ipAddress, userAgent,
+                        jwtTokenService.extractSessionTelemetry(response.accessToken(), user.getId()).orElse(null));
+            } catch (RuntimeException exception) {
+                LOGGER.warn("Login security event persistence failed exceptionType={}",
+                        exception.getClass().getSimpleName());
+            }
+        } else {
+            recordLoginSecurityEvent("SUCCESS", user.getId(), user.getId(), ipAddress, userAgent);
+        }
         return response;
     }
 
@@ -130,6 +154,7 @@ public class AuthService {
         user.setRole(CUSTOMER_ROLE);
         user.setHoTen(request.hoTen().trim());
         user.setEmail(request.email().trim());
+        user.setEmailVerifiedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
         user.setStatus("Hoat dong");
         user.setDeleted(false);
         user.setCreatedAt(LocalDateTime.now());
@@ -151,6 +176,7 @@ public class AuthService {
 
         customerRepository.save(customer);
         auditLogService.success("ACCOUNT_REGISTER", user.getId(), user.getId(), "USER", user.getId());
+        securityEventService.recordDomainAction("ACCOUNT_REGISTER", user.getId(), user.getId());
         return issueLoginResponse(user);
     }
 
@@ -166,10 +192,12 @@ public class AuthService {
                 .orElseThrow(() -> new BadRequestException("Thong tin khoi phuc khong dung."));
         passwordResetTokenStore.consume(requestEmail, request.resetToken());
         user.setPassword(passwordEncoder.encode(request.newPassword()));
+        user.setAuthVersion((user.getAuthVersion() == null ? 0L : user.getAuthVersion()) + 1L);
         userRepository.save(user);
         userRepository.markPasswordResetCompleted(user.getId());
         redisTokenStore.revokeAll(user.getUsername());
         auditLogService.success("ACCOUNT_PASSWORD_RESET", user.getId(), user.getId(), "USER", user.getId());
+        securityEventService.recordDomainAction("PASSWORD_RESET", null, user.getId());
     }
 
     public void sendRegisterOtp(OtpRequest request, String ipAddress) {
@@ -243,12 +271,20 @@ public class AuthService {
         return toCurrentUserResponse(user);
     }
 
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    private com.flarefitness.backend.service.siem.SiemSessionRevocationEvidence sessionRevocationEvidence;
+
     public void logout(String token) {
         redisTokenStore.revoke(token);
+        if(sessionRevocationEvidence!=null)try{sessionRevocationEvidence.record(token,false);}catch(RuntimeException telemetryFailure){LOGGER.warn("Session revoke evidence unavailable; authentication remains revoked.");}
     }
 
     public void logoutAll(String username) {
         redisTokenStore.revokeAll(username);
+        if(sessionRevocationEvidence!=null&&org.springframework.web.context.request.RequestContextHolder.getRequestAttributes() instanceof org.springframework.web.context.request.ServletRequestAttributes request){
+            Object token=request.getRequest().getAttribute(com.flarefitness.backend.security.JwtAuthenticationFilter.CURRENT_TOKEN_REQUEST_ATTRIBUTE);
+            if(token instanceof String value)try{sessionRevocationEvidence.record(value,true);}catch(RuntimeException telemetryFailure){LOGGER.warn("Session revoke-all evidence unavailable; authentication remains revoked.");}
+        }
     }
 
     public CurrentUserResponse toCurrentUserResponse(User user) {
@@ -270,9 +306,20 @@ public class AuthService {
         return customerRepository.findUniqueActiveByUserId(user.getId());
     }
 
-    private UnauthorizedException invalidCredentials(String subjectId) {
+    private UnauthorizedException invalidCredentials(String subjectId, String ipAddress, String userAgent) {
         auditLogService.failure("AUTH_LOGIN", null, subjectId, "USER", subjectId);
+        recordLoginSecurityEvent("FAILURE", null, subjectId, ipAddress, userAgent);
         return new UnauthorizedException("Sai ten dang nhap hoac mat khau.");
+    }
+
+    private void recordLoginSecurityEvent(String outcome, String actorId, String targetId,
+                                          String ipAddress, String userAgent) {
+        try {
+            securityEventService.recordAuth("LOGIN", outcome, actorId, targetId, ipAddress, userAgent);
+        } catch (RuntimeException exception) {
+            LOGGER.warn("Login security event persistence failed exceptionType={}",
+                    exception.getClass().getSimpleName());
+        }
     }
 
     private void consumeDummyLoginPasswordWork() {

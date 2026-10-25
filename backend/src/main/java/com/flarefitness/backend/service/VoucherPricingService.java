@@ -680,7 +680,7 @@ public class VoucherPricingService {
         User user = userResult
                 .orElseThrow(() -> new ResourceNotFoundException("Khong tim thay tai khoan khach hang."));
         String authority = CurrentUserPrincipal.toAuthority(user.getRole());
-        if ("ROLE_ADMIN".equals(authority) || "ROLE_STAFF".equals(authority)) {
+        if (!"ROLE_CUSTOMER".equals(authority)) {
             throw new BadRequestException("Voucher chi co the cap cho tai khoan khach hang.");
         }
         return user;

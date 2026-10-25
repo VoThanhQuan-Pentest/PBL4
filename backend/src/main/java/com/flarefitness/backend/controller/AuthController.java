@@ -53,7 +53,8 @@ public class AuthController {
             @Valid @RequestBody LoginRequest request,
             HttpServletRequest httpServletRequest
     ) {
-        return loginResponse(authService.login(request, ipAddressResolver.resolve(httpServletRequest)));
+        return loginResponse(authService.login(request, ipAddressResolver.resolve(httpServletRequest),
+                httpServletRequest.getHeader("User-Agent")));
     }
 
     @GetMapping("/csrf")

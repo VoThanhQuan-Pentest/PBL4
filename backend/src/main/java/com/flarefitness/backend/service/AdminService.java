@@ -34,6 +34,8 @@ public class AdminService {
     private static final int LEGACY_LIST_LIMIT = 100;
     private static final String ROLE_ADMIN = "Quan tri vien";
     private static final String ROLE_STAFF = "Nhan vien";
+    private static final String ROLE_SOC_L1 = "SOC L1";
+    private static final String ROLE_SOC_L2 = "SOC L2";
     private static final String ROLE_CUSTOMER = "Khach hang";
     private static final String STATUS_ACTIVE = "Hoat dong";
     private static final String STATUS_DELETED = "Da xoa";
@@ -158,6 +160,12 @@ public class AdminService {
         String rawPassword = trimToNull(request.password());
         if (rawPassword != null) {
             user.setPassword(passwordEncoder.encode(rawPassword));
+        }
+
+        if (rawPassword != null || isInactiveStatus(status)
+                || !previousUsername.equalsIgnoreCase(user.getUsername())
+                || !String.valueOf(previousRole).equalsIgnoreCase(user.getRole())) {
+            user.setAuthVersion((user.getAuthVersion() == null ? 0L : user.getAuthVersion()) + 1L);
         }
 
         userRepository.save(user);
@@ -314,6 +322,8 @@ public class AdminService {
         return switch (normalizeRole(role)) {
             case ROLE_ADMIN -> "user-admin-";
             case ROLE_STAFF -> "user-staff-";
+            case ROLE_SOC_L1 -> "user-soc-l1-";
+            case ROLE_SOC_L2 -> "user-soc-l2-";
             default -> "user-customer-";
         };
     }
@@ -325,6 +335,14 @@ public class AdminService {
         }
         if (normalized.contains("nhan vien") || normalized.contains("staff")) {
             return ROLE_STAFF;
+        }
+        if (normalized.equals("soc l2") || normalized.equals("role soc l2")) {
+            return ROLE_SOC_L2;
+        }
+        if (normalized.equals("soc l1") || normalized.equals("role soc l1")
+                || normalized.contains("analyst") || normalized.contains("chuyen vien an ninh")
+                || normalized.contains("chuyen vien bao mat")) {
+            return ROLE_SOC_L1;
         }
         return ROLE_CUSTOMER;
     }

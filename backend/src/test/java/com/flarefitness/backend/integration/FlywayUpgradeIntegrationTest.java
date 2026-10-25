@@ -36,11 +36,31 @@ class FlywayUpgradeIntegrationTest {
             seedVersionTenVoucherRedemption(mysql);
             seedLegacyManagedReviewSyncState(mysql);
 
+            flyway(mysql, "37").migrate();
+            try (Connection connection = connection(mysql); var statement = connection.createStatement()) {
+                statement.executeUpdate("INSERT INTO sensitive_action_confirmations "
+                        + "(id,user_id,session_pseudonym,auth_version,contact_email,contact_verified_at,operation,"
+                        + "password_hash,state,created_at,expires_at,version) VALUES "
+                        + "('11111111-1111-4111-8111-111111111111','legacy-user','" + "f".repeat(64) + "',0,"
+                        + "'fixture@example.test',CURRENT_TIMESTAMP,'PASSWORD_CHANGE','pending-test-hash',"
+                        + "'PENDING',CURRENT_TIMESTAMP,DATE_ADD(CURRENT_TIMESTAMP,INTERVAL 5 MINUTE),0)");
+            }
+
             Flyway latestFlyway = flyway(mysql, null);
             latestFlyway.migrate();
 
-            assertThat(latestFlyway.info().current().getVersion().getVersion()).isEqualTo("12");
+            assertThat(latestFlyway.info().current().getVersion().getVersion()).isEqualTo("41");
             try (Connection connection = connection(mysql)) {
+                try (var statement = connection.createStatement()) {
+                    statement.executeUpdate("INSERT INTO tbl_khach_hang (id,ten_khach,sdt) VALUES "
+                            + "('blank-phone-a','Lab A',''),('blank-phone-b','Lab B',''),"
+                            + "('unique-phone-a','Lab C','0930000555')");
+                    assertThat(readCount(connection, "SELECT COUNT(*) FROM tbl_khach_hang "
+                            + "WHERE id IN ('blank-phone-a','blank-phone-b') AND sdt_active IS NULL")).isEqualTo(2);
+                    org.assertj.core.api.Assertions.assertThatExceptionOfType(java.sql.SQLException.class)
+                            .isThrownBy(() -> statement.executeUpdate("INSERT INTO tbl_khach_hang (id,ten_khach,sdt) "
+                                    + "VALUES ('duplicate-phone-b','Lab D','+84930000555')"));
+                }
                 assertThat(readString(connection,
                         "SELECT ten_san_pham FROM tbl_san_pham WHERE sku = 'WC-001'"))
                         .isEqualTo("Bộ đồ đội tuyển Đức WorldCup 2026");
@@ -50,6 +70,17 @@ class FlywayUpgradeIntegrationTest {
                 assertThat(readString(connection,
                         "SELECT id FROM tbl_san_pham WHERE id = 'legacy-worldcup-product'"))
                         .isEqualTo("legacy-worldcup-product");
+                assertThat(readString(connection,
+                        "SELECT email_verified_at FROM tbl_nguoi_dung WHERE id = 'legacy-user'"))
+                        .isNull();
+                assertThat(readCount(connection,
+                        "SELECT COUNT(*) FROM sensitive_action_confirmations"))
+                        .isEqualTo(1);
+                assertThat(readString(connection, "SELECT state FROM sensitive_action_confirmations"))
+                        .isEqualTo("EXPIRED");
+                assertThat(readString(connection, "SELECT password_hash FROM sensitive_action_confirmations")).isNull();
+                assertThat(readString(connection, "SELECT policy_id FROM sensitive_action_confirmations"))
+                        .isEqualTo("legacy-unbound");
                 assertThat(readString(connection,
                         "SELECT password FROM tbl_nguoi_dung WHERE id = 'legacy-plaintext-user'"))
                         .startsWith("{reset-required}")
@@ -79,6 +110,15 @@ class FlywayUpgradeIntegrationTest {
                 assertThat(readCount(connection,
                         "SELECT COUNT(*) FROM tbl_sync_state WHERE id = 'preserved-managed-reviews'"))
                         .isEqualTo(1);
+                assertThat(readCount(connection,
+                        "SELECT COUNT(*) FROM information_schema.tables "
+                                + "WHERE table_schema = DATABASE() AND table_name LIKE 'siem_%'"))
+                        .isGreaterThanOrEqualTo(10);
+                assertThat(readString(connection,
+                        "SELECT COLUMN_DEFAULT FROM information_schema.columns "
+                                + "WHERE table_schema = DATABASE() AND table_name = 'siem_incidents' "
+                                + "AND column_name = 'incident_nature'"))
+                        .isEqualTo("UNKNOWN");
             }
             assertThat(latestFlyway.migrate().migrationsExecuted).isZero();
         } finally {

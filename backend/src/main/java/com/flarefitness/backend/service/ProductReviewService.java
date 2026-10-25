@@ -223,7 +223,7 @@ public class ProductReviewService {
 
         User user = principal.getUser();
         String authority = CurrentUserPrincipal.toAuthority(user.getRole());
-        if ("ROLE_ADMIN".equals(authority) || "ROLE_STAFF".equals(authority)) {
+        if (!"ROLE_CUSTOMER".equals(authority)) {
             throw new AccessDeniedException("Chuc nang danh gia chi danh cho khach hang.");
         }
         return user;

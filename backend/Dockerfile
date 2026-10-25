@@ -2,10 +2,11 @@ FROM maven:3.9.9-eclipse-temurin-21@sha256:3a4ab3276a087bf276f79cae96b1af04f5373
 WORKDIR /app
 
 COPY pom.xml .
-RUN mvn -q -DskipTests dependency:go-offline
-
 COPY src ./src
-RUN mvn -q -DskipTests package
+# Resolve the project through Maven's normal dependency mediation. The separate
+# go-offline goal traverses lab-only transitive descriptors before mediation and
+# can request unavailable Jackson snapshots that are absent from the final tree.
+RUN MAVEN_OPTS="-Xmx512m -XX:ActiveProcessorCount=2" mvn -q -DskipTests package
 
 FROM eclipse-temurin:21-jre-jammy@sha256:d63bd8d9b171999cbed8576f2c76e874dd4856791a358536e5c4d407e77edc13
 WORKDIR /app

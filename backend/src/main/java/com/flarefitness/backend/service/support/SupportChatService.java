@@ -413,8 +413,7 @@ public class SupportChatService {
     }
 
     private void assertCustomerUser(User user) {
-        if (CurrentUserPrincipal.toAuthority(user.getRole()).equals("ROLE_ADMIN")
-                || CurrentUserPrincipal.toAuthority(user.getRole()).equals("ROLE_STAFF")) {
+        if (!CurrentUserPrincipal.toAuthority(user.getRole()).equals("ROLE_CUSTOMER")) {
             throw new AccessDeniedException("Tai khoan nhan vien va quan tri vien khong su dung kenh ho tro khach hang.");
         }
     }

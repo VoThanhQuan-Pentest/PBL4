@@ -1,0 +1,5 @@
+{
+  "policy_document_json": "{\"detection_percentile_micro\":{\"COLD\":99995000,\"READY\":99995000},\"feature_schema_version\":2,\"policy_id\":\"strict-v2b-r99995000-c99995000-rules45\",\"policy_schema_version\":2,\"positive_level\":\"VERY_UNUSUAL\",\"quality\":{\"alpha_denominator\":20,\"alpha_numerator\":1,\"cluster_resamples\":5000,\"fpr_max_ppm\":1000,\"fpr_strict\":true,\"global_comparisons\":6,\"minimum_family_positive\":2000,\"minimum_normal\":10000000,\"minimum_positive\":10000,\"precision_min_ppm\":998000,\"recall_min_ppm\":990000,\"recall_strict\":true,\"scopes\":[\"MODEL_ONLY\",\"SIEM_FINAL\"],\"slice_recall_min_ppm\":990000},\"risk\":{\"auto_containment\":false,\"rule_min_signals\":2,\"rule_risk_threshold\":45,\"very_unusual_creates_l1\":true,\"warning_creates_l1\":false},\"shadow\":{\"maximum_heartbeat_gap_seconds\":300,\"minimum_closed_windows\":600,\"minimum_elapsed_seconds\":86400},\"telemetry_contract_version\":2,\"warning_percentile_micro\":99900000}",
+  "policy_id": "strict-v2b-r99995000-c99995000-rules45",
+  "policy_sha256": "80477628dd0d5f0c03e4535b3e668a8a767061683ae015971a08dd3fdeeb519e"
+}

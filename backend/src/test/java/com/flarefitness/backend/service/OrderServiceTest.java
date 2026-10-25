@@ -588,7 +588,7 @@ class OrderServiceTest {
                 staffAuthentication
         ))
                 .isInstanceOf(AccessDeniedException.class)
-                .hasMessageContaining("Nhan vien va quan tri vien");
+                .hasMessageContaining("Chi tai khoan khach hang");
 
         verify(orderRepository, never()).findByIdForUpdate(any());
     }

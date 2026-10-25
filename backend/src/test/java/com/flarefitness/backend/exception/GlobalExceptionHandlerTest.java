@@ -14,6 +14,10 @@ import org.slf4j.MDC;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.web.servlet.NoHandlerFoundException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 class GlobalExceptionHandlerTest {
 
@@ -70,5 +74,25 @@ class GlobalExceptionHandlerTest {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.GONE);
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().code()).isEqualTo("RESOURCE_GONE");
+    }
+
+    @Test
+    void unmatchedRoutesUseSanitized404WithoutInternalErrorLogging() {
+        MDC.put("traceId", "missing-route-123");
+        String rawPath = "/api/private/attacker-path-canary";
+        var handler = new GlobalExceptionHandler();
+        for (Exception exception : java.util.List.of(
+                new NoResourceFoundException(HttpMethod.GET, rawPath),
+                new NoHandlerFoundException("GET", rawPath, HttpHeaders.EMPTY))) {
+            var response = handler.handleMissingRoute(exception);
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+            assertThat(response.getBody()).isNotNull().satisfies(body -> {
+                assertThat(body.status()).isEqualTo(404);
+                assertThat(body.code()).isEqualTo("RESOURCE_NOT_FOUND");
+                assertThat(body.traceId()).isEqualTo("missing-route-123");
+                assertThat(body.message()).doesNotContain(rawPath, "static resource");
+            });
+        }
+        assertThat(appender.list).isEmpty();
     }
 }

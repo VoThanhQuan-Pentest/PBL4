@@ -43,7 +43,7 @@ public class CurrentUserPrincipal implements UserDetails {
 
     @Override
     public boolean isAccountNonLocked() {
-        return true;
+        return !user.isSocIsolationActive();
     }
 
     @Override
@@ -76,10 +76,17 @@ public class CurrentUserPrincipal implements UserDetails {
         if ("nh n vi n".equals(normalizedRole) || "staff".equals(normalizedRole)) {
             return "ROLE_STAFF";
         }
+        if ("soc l2".equals(normalizedRole) || "role soc l2".equals(normalizedRole)) {
+            return "ROLE_SOC_L2";
+        }
+        if ("soc l1".equals(normalizedRole) || "role soc l1".equals(normalizedRole)) {
+            return "ROLE_SOC_L1";
+        }
 
         return switch (normalizedRole) {
             case "quan tri vien", "quan tri" -> "ROLE_ADMIN";
             case "nhan vien", "nhanvien" -> "ROLE_STAFF";
+            case "analyst", "security analyst", "chuyen vien an ninh", "chuyen vien bao mat" -> "ROLE_SOC_L1";
             case "quản trị viên", "admin" -> "ROLE_ADMIN";
             case "nhân viên", "staff" -> "ROLE_STAFF";
             default -> "ROLE_CUSTOMER";
@@ -92,7 +99,7 @@ public class CurrentUserPrincipal implements UserDetails {
                 .replace('đ', 'd')
                 .replace('Đ', 'd')
                 .replace('?', ' ')
-                .replaceAll("[^a-z\\s]", " ")
+                .replaceAll("[^a-z0-9\\s]", " ")
                 .replaceAll("\\s+", " ")
                 .trim();
 

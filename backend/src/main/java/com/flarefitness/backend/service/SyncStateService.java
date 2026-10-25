@@ -231,7 +231,7 @@ public class SyncStateService {
 
     private boolean isCustomer(User user) {
         String authority = CurrentUserPrincipal.toAuthority(user.getRole());
-        return !"ROLE_ADMIN".equals(authority) && !"ROLE_STAFF".equals(authority);
+        return "ROLE_CUSTOMER".equals(authority);
     }
 
     private boolean isStaffOrAdmin(User user) {

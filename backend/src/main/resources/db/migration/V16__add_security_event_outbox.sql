@@ -1,0 +1,21 @@
+CREATE TABLE siem_security_events (
+    id VARCHAR(64) NOT NULL,
+    event_timestamp DATETIME(6) NOT NULL,
+    actor_user_id VARCHAR(64) NULL,
+    target_user_id VARCHAR(64) NULL,
+    source_ip VARCHAR(64) NULL,
+    event_type VARCHAR(48) NOT NULL,
+    action VARCHAR(80) NOT NULL,
+    outcome VARCHAR(16) NOT NULL,
+    route_group VARCHAR(64) NULL,
+    http_method VARCHAR(8) NULL,
+    http_status INT NULL,
+    user_agent_family VARCHAR(32) NULL,
+    trace_id VARCHAR(64) NULL,
+    exported_at DATETIME(6) NULL,
+    ngay_tao DATETIME(6) NOT NULL,
+    PRIMARY KEY (id),
+    INDEX idx_siem_event_export (exported_at, ngay_tao),
+    INDEX idx_siem_event_actor_time (actor_user_id, event_timestamp),
+    INDEX idx_siem_event_target_time (target_user_id, event_timestamp)
+) ENGINE=InnoDB;

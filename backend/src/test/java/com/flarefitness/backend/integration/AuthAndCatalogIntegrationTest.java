@@ -99,6 +99,13 @@ class AuthAndCatalogIntegrationTest extends ContainerizedIntegrationTest {
         mockMvc.perform(get("/api/auth/me").cookie(new MockCookie("access_token", accessToken)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.username").value(username));
+
+        mockMvc.perform(post("/api/orders")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .cookie(new MockCookie("access_token", accessToken))
+                        .content("{}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("CSRF_INVALID"));
     }
 
     @Test

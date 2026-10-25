@@ -6,25 +6,47 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.NoHandlerFoundException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    @ExceptionHandler(PostloginActionException.class)
+    public ResponseEntity<ApiErrorResponse> handlePostloginAction(PostloginActionException exception) {
+        HttpStatus status = HttpStatus.valueOf(exception.status());
+        ApiErrorResponse base = build(status, exception.code(), exception.getMessage()).getBody();
+        ApiErrorResponse body = new ApiErrorResponse(base.timestamp(), base.status(), base.error(), base.message(),
+                base.code(), base.traceId(), exception.decisionId(), exception.retryAfterSeconds());
+        var response = ResponseEntity.status(status);
+        if (exception.retryAfterSeconds() != null) response.header("Retry-After", exception.retryAfterSeconds().toString());
+        return response.body(body);
+    }
 
     private static final Logger LOGGER = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
     @ExceptionHandler(ResourceNotFoundException.class)
     public ResponseEntity<ApiErrorResponse> handleNotFound(ResourceNotFoundException exception) {
         return build(HttpStatus.NOT_FOUND, "RESOURCE_NOT_FOUND", exception.getMessage());
+    }
+
+    /** An unmatched route is client-side 404 telemetry, not an internal server failure. */
+    @ExceptionHandler({NoResourceFoundException.class, NoHandlerFoundException.class})
+    public ResponseEntity<ApiErrorResponse> handleMissingRoute(Exception exception) {
+        // Framework exception messages include attacker-controlled paths; do not echo or log them.
+        return build(HttpStatus.NOT_FOUND, "RESOURCE_NOT_FOUND", "Tai nguyen khong ton tai.");
     }
 
     @ExceptionHandler(ResourceGoneException.class)
@@ -45,6 +67,31 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(TooManyRequestsException.class)
     public ResponseEntity<ApiErrorResponse> handleTooManyRequests(TooManyRequestsException exception) {
         return build(HttpStatus.TOO_MANY_REQUESTS, "RATE_LIMITED", exception.getMessage());
+    }
+
+    @ExceptionHandler(ConflictException.class)
+    public ResponseEntity<ApiErrorResponse> handleConflict(ConflictException exception) {
+        return build(HttpStatus.CONFLICT, "CONFLICT", exception.getMessage());
+    }
+
+    @ExceptionHandler(ActionConfirmationRequiredException.class)
+    public ResponseEntity<ApiErrorResponse> handleActionConfirmationRequired(ActionConfirmationRequiredException exception) {
+        return build(HttpStatus.CONFLICT, "ACTION_CONFIRMATION_REQUIRED", exception.getMessage());
+    }
+
+    @ExceptionHandler(ActionConfirmationCodeException.class)
+    public ResponseEntity<ApiErrorResponse> handleActionConfirmationCode(ActionConfirmationCodeException exception) {
+        return build(HttpStatus.BAD_REQUEST, "ACTION_CONFIRMATION_CODE_INVALID", exception.getMessage());
+    }
+
+    @ExceptionHandler(ServiceUnavailableException.class)
+    public ResponseEntity<ApiErrorResponse> handleServiceUnavailable(ServiceUnavailableException exception) {
+        return build(HttpStatus.SERVICE_UNAVAILABLE, "SIEM_UNAVAILABLE", exception.getMessage());
+    }
+
+    @ExceptionHandler(ObjectOptimisticLockingFailureException.class)
+    public ResponseEntity<ApiErrorResponse> handleOptimisticLock(ObjectOptimisticLockingFailureException exception) {
+        return build(HttpStatus.CONFLICT, "STALE_VERSION", "Du lieu da duoc cap nhat boi mot phien khac. Hay tai lai.");
     }
 
     @ExceptionHandler(AccessDeniedException.class)
@@ -71,6 +118,11 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiErrorResponse> handleArgumentTypeMismatch(
             MethodArgumentTypeMismatchException exception) {
         return build(HttpStatus.BAD_REQUEST, "INVALID_PARAMETER", "Tham so API khong hop le.");
+    }
+
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    public ResponseEntity<ApiErrorResponse> handleMissingParameter(MissingServletRequestParameterException exception) {
+        return build(HttpStatus.BAD_REQUEST, "MISSING_PARAMETER", "Thieu tham so API bat buoc.");
     }
 
     @ExceptionHandler(HttpRequestMethodNotSupportedException.class)

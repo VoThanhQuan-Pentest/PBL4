@@ -11,7 +11,7 @@ import com.flarefitness.backend.repository.CustomerRepository;
 import com.flarefitness.backend.repository.UserRepository;
 import com.flarefitness.backend.security.PasswordPolicy;
 import com.flarefitness.backend.security.IpRateLimitService;
-import java.text.Normalizer;
+import com.flarefitness.backend.service.siem.SecurityEventService;
 import java.time.LocalDateTime;
 import java.util.Locale;
 import java.util.Optional;
@@ -22,6 +22,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class ProfileService {
+    private static final org.slf4j.Logger LOGGER = org.slf4j.LoggerFactory.getLogger(ProfileService.class);
 
     private final UserRepository userRepository;
     private final CustomerRepository customerRepository;
@@ -33,6 +34,8 @@ public class ProfileService {
     private final PasswordPolicy passwordPolicy;
     private final IpRateLimitService ipRateLimitService;
     private final AuditLogService auditLogService;
+    private final SecurityEventService securityEventService;
+    private final SensitiveActionPolicy sensitiveActionPolicy;
 
     public ProfileService(
             UserRepository userRepository,
@@ -44,8 +47,21 @@ public class ProfileService {
             com.flarefitness.backend.security.RedisTokenStore redisTokenStore,
             PasswordPolicy passwordPolicy,
             IpRateLimitService ipRateLimitService,
-            AuditLogService auditLogService
+            AuditLogService auditLogService,
+            SecurityEventService securityEventService
     ) {
+        this(userRepository, customerRepository, passwordEncoder, authService, emailOtpService,
+                phoneNumberService, redisTokenStore, passwordPolicy, ipRateLimitService,
+                auditLogService, securityEventService, new SensitiveActionPolicy(false, ""));
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public ProfileService(UserRepository userRepository, CustomerRepository customerRepository,
+            PasswordEncoder passwordEncoder, AuthService authService, EmailOtpService emailOtpService,
+            PhoneNumberService phoneNumberService,
+            com.flarefitness.backend.security.RedisTokenStore redisTokenStore, PasswordPolicy passwordPolicy,
+            IpRateLimitService ipRateLimitService, AuditLogService auditLogService,
+            SecurityEventService securityEventService, SensitiveActionPolicy sensitiveActionPolicy) {
         this.userRepository = userRepository;
         this.customerRepository = customerRepository;
         this.passwordEncoder = passwordEncoder;
@@ -56,6 +72,8 @@ public class ProfileService {
         this.passwordPolicy = passwordPolicy;
         this.ipRateLimitService = ipRateLimitService;
         this.auditLogService = auditLogService;
+        this.securityEventService = securityEventService;
+        this.sensitiveActionPolicy = sensitiveActionPolicy;
     }
 
     public CurrentUserResponse getProfile(String username) {
@@ -65,10 +83,19 @@ public class ProfileService {
 
     @Transactional
     public CurrentUserResponse updateProfile(String username, UpdateProfileRequest request) {
-        User user = loadUser(username);
+        User user = loadUserForMutation(username);
         String oldEmail = user.getEmail();
         String requestedEmail = normalizeEmail(request.email());
         boolean emailChanged = !normalizeEmail(oldEmail).equalsIgnoreCase(requestedEmail);
+        if (emailChanged) recordSensitiveAttempt("EMAIL_CHANGE", user.getId());
+        if (emailChanged && sensitiveActionPolicy.requiresConfirmation(user)) {
+            throw new com.flarefitness.backend.exception.ActionConfirmationRequiredException();
+        }
+        return applyProfileUpdate(user, request, requestedEmail, emailChanged);
+    }
+
+    private CurrentUserResponse applyProfileUpdate(User user, UpdateProfileRequest request,
+            String requestedEmail, boolean emailChanged) {
         String requestedPhone = isCustomer(user.getRole())
                 ? phoneNumberService.requireAvailable(request.sdt(), user.getId())
                 : phoneNumberService.normalize(request.sdt());
@@ -78,6 +105,7 @@ public class ProfileService {
                 throw new BadRequestException("Email da duoc su dung boi tai khoan khac.");
             }
             emailOtpService.verifyOtp(EmailOtpService.PURPOSE_PROFILE_EMAIL, requestedEmail, request.otpCode());
+            user.setEmailVerifiedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
         }
 
         user.setHoTen(request.hoTen());
@@ -94,7 +122,50 @@ public class ProfileService {
         }
 
         auditLogService.success("ACCOUNT_PROFILE_UPDATE", user.getId(), user.getId(), "USER", user.getId());
+        if (emailChanged) securityEventService.recordDomainAction("EMAIL_CHANGE", user.getId(), user.getId());
         return authService.toCurrentUserResponse(user);
+    }
+
+    /** Internal execution path; caller holds the account and challenge locks in one transaction. */
+    CurrentUserResponse applyConfirmedEmailChange(User user, UpdateProfileRequest request) {
+        if (!sensitiveActionPolicy.requiresConfirmation(user)) {
+            throw new com.flarefitness.backend.exception.ConflictException("Chinh sach xac nhan khong con ap dung.");
+        }
+        String target = normalizeEmail(request.email());
+        if (target.equals(normalizeEmail(user.getEmail()))) {
+            throw new com.flarefitness.backend.exception.ConflictException("Email tai khoan da thay doi. Hay tao yeu cau moi.");
+        }
+        return applyProfileUpdate(user, request, target, true);
+    }
+
+    String prepareConfirmedPassword(User user, ChangePasswordRequest request) {
+        recordSensitiveAttempt("PASSWORD_CHANGE", user.getId());
+        if (!request.newPassword().equals(request.confirmPassword())) {
+            throw new BadRequestException("Mat khau xac nhan khong khop.");
+        }
+        passwordPolicy.validateNewPassword(request.newPassword());
+        if (!authService.passwordMatches(request.currentPassword(), user)) {
+            throw new BadRequestException("Mat khau hien tai khong dung.");
+        }
+        return passwordEncoder.encode(request.newPassword());
+    }
+
+    String prepareConfirmedEmail(User user, UpdateProfileRequest request) {
+        recordSensitiveAttempt("EMAIL_CHANGE", user.getId());
+        String target = normalizeEmail(request.email());
+        if (target.equals(normalizeEmail(user.getEmail()))
+                || userRepository.existsByEmailIgnoreCaseAndIdNot(target, user.getId())) {
+            throw new BadRequestException("Email moi khong hop le hoac da duoc su dung.");
+        }
+        return isCustomer(user.getRole()) ? phoneNumberService.requireAvailable(request.sdt(), user.getId())
+                : phoneNumberService.normalize(request.sdt());
+    }
+
+    void applyConfirmedPassword(User user, String encodedPassword) {
+        if (!sensitiveActionPolicy.requiresConfirmation(user) || encodedPassword == null || encodedPassword.isBlank()) {
+            throw new com.flarefitness.backend.exception.ConflictException("Yeu cau doi mat khau khong con hieu luc.");
+        }
+        savePasswordAndRevoke(user, encodedPassword);
     }
 
     public void sendProfileEmailOtp(String username, String email, String ipAddress) {
@@ -112,7 +183,11 @@ public class ProfileService {
 
     @Transactional
     public void changePassword(String username, ChangePasswordRequest request) {
-        User user = loadUser(username);
+        User user = loadUserForMutation(username);
+        recordSensitiveAttempt("PASSWORD_CHANGE", user.getId());
+        if (sensitiveActionPolicy.requiresConfirmation(user)) {
+            throw new com.flarefitness.backend.exception.ActionConfirmationRequiredException();
+        }
 
         if (!request.newPassword().equals(request.confirmPassword())) {
             throw new BadRequestException("Mat khau xac nhan khong khop.");
@@ -123,14 +198,34 @@ public class ProfileService {
             throw new BadRequestException("Mat khau hien tai khong dung.");
         }
 
-        user.setPassword(passwordEncoder.encode(request.newPassword()));
+        savePasswordAndRevoke(user, passwordEncoder.encode(request.newPassword()));
+    }
+
+    private void savePasswordAndRevoke(User user, String encodedPassword) {
+        user.setPassword(encodedPassword);
+        user.setAuthVersion((user.getAuthVersion() == null ? 0L : user.getAuthVersion()) + 1L);
         userRepository.save(user);
         redisTokenStore.revokeAll(user.getUsername());
         auditLogService.success("ACCOUNT_PASSWORD_CHANGE", user.getId(), user.getId(), "USER", user.getId());
+        securityEventService.recordDomainAction("PASSWORD_CHANGE", user.getId(), user.getId());
+    }
+
+    private void recordSensitiveAttempt(String action, String actorId) {
+        if (!securityEventService.isPostLoginEnabled()) return;
+        try {
+            securityEventService.recordSensitiveActionAttempt(action, actorId);
+        } catch (RuntimeException exception) {
+            LOGGER.warn("Sensitive-action telemetry failed exceptionType={}", exception.getClass().getSimpleName());
+        }
     }
 
     private User loadUser(String username) {
         return userRepository.findByUsernameIgnoreCase(username)
+                .orElseThrow(() -> new ResourceNotFoundException("Khong tim thay nguoi dung."));
+    }
+
+    private User loadUserForMutation(String username) {
+        return userRepository.findByUsernameIgnoreCaseForUpdate(username)
                 .orElseThrow(() -> new ResourceNotFoundException("Khong tim thay nguoi dung."));
     }
 
@@ -148,18 +243,11 @@ public class ProfileService {
     }
 
     private boolean isCustomer(String role) {
-        String normalized = stripVietnamese(String.valueOf(role == null ? "" : role)).toLowerCase(Locale.ROOT);
-        String raw = String.valueOf(role == null ? "" : role).toLowerCase(Locale.ROOT);
-        return normalized.contains("khach")
-                || normalized.contains("customer")
-                || raw.contains("kh") && raw.contains("ng");
+        return "ROLE_CUSTOMER".equals(com.flarefitness.backend.security.CurrentUserPrincipal.toAuthority(role));
     }
 
     private String normalizeEmail(String email) {
         return String.valueOf(email == null ? "" : email).trim().toLowerCase(Locale.ROOT);
     }
 
-    private String stripVietnamese(String value) {
-        return Normalizer.normalize(value, Normalizer.Form.NFD).replaceAll("\\p{M}", "");
-    }
 }

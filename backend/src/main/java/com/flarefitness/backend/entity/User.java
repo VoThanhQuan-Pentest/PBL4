@@ -28,11 +28,32 @@ public class User extends BaseEntity {
     @Column(name = "email", length = 150)
     private String email;
 
+    /** Null for legacy users whose email verification provenance is unknown. */
+    @Column(name = "email_verified_at")
+    private java.time.LocalDateTime emailVerifiedAt;
+
     @Column(name = "trang_thai", nullable = false, length = 30)
     private String status;
 
     @Column(name = "is_deleted", nullable = false)
     private Boolean deleted = false;
+
+    @Column(name = "auth_version", nullable = false)
+    private Long authVersion = 0L;
+
+    @Column(name = "soc_isolated", nullable = false)
+    private Boolean socIsolated = false;
+
+    @Column(name = "soc_isolated_until")
+    private java.time.LocalDateTime socIsolatedUntil;
+
+    public boolean isSocIsolationActive() {
+        return Boolean.TRUE.equals(socIsolated) && (socIsolatedUntil == null
+                || socIsolatedUntil.isAfter(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC)));
+    }
+    public void setSocIsolated(Boolean value) { socIsolated = value; }
+    public java.time.LocalDateTime getSocIsolatedUntil() { return socIsolatedUntil; }
+    public void setSocIsolatedUntil(java.time.LocalDateTime value) { socIsolatedUntil = value; }
 
     public String getId() {
         return id;
@@ -82,6 +103,10 @@ public class User extends BaseEntity {
         this.email = email;
     }
 
+    public java.time.LocalDateTime getEmailVerifiedAt() { return emailVerifiedAt; }
+
+    public void setEmailVerifiedAt(java.time.LocalDateTime value) { emailVerifiedAt = value; }
+
     public String getStatus() {
         return status;
     }
@@ -96,5 +121,13 @@ public class User extends BaseEntity {
 
     public void setDeleted(Boolean deleted) {
         this.deleted = deleted;
+    }
+
+    public Long getAuthVersion() {
+        return authVersion;
+    }
+
+    public void setAuthVersion(Long authVersion) {
+        this.authVersion = authVersion;
     }
 }

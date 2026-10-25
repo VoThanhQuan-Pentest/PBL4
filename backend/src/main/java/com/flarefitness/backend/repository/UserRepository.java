@@ -2,6 +2,8 @@ package com.flarefitness.backend.repository;
 
 import com.flarefitness.backend.entity.User;
 import java.util.Optional;
+import java.util.Collection;
+import java.util.List;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -13,10 +15,26 @@ import org.springframework.data.repository.query.Param;
 
 public interface UserRepository extends JpaRepository<User, String> {
 
+    interface AnalystIdentity {
+        String getId();
+        String getName();
+        String getUsername();
+        String getRole();
+    }
+
+    /** A bounded incident-page lookup, including retained identities of deleted accounts. */
+    @Query("select u.id as id, u.hoTen as name, u.username as username, u.role as role from User u where u.id in :ids")
+    List<AnalystIdentity> findAnalystIdentities(@Param("ids") Collection<String> ids);
+
     Page<User> findAllByOrderByHoTenAsc(Pageable pageable);
 
     @Query("select u from User u where lower(u.username) = lower(:username) and u.deleted = false")
     Optional<User> findByUsernameIgnoreCase(@Param("username") String username);
+
+    /** Serialize profile mutations, including unchanged-email submissions racing an email change. */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select u from User u where lower(u.username) = lower(:username) and u.deleted = false")
+    Optional<User> findByUsernameIgnoreCaseForUpdate(@Param("username") String username);
 
     @Query("select u from User u where lower(u.email) = lower(:email) and u.deleted = false")
     Optional<User> findByEmailIgnoreCase(@Param("email") String email);

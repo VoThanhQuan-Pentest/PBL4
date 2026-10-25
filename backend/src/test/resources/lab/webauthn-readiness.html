@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="vi">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flare — thử khóa riêng trong lab</title>
+<body data-lifecycle-phase="__LIFECYCLE_PHASE__">
+<h1>Kiểm tra khóa xác thực riêng</h1>
+<p>Chỉ dùng tài khoản lab và dữ liệu giả. Không đổi mật khẩu hay email, không chạy training.</p>
+<p>Thiết bị có thể lưu một credential thử nghiệm cho localhost. Chọn điện thoại hoặc khóa riêng bạn đã xác nhận; không dùng khóa dùng chung quyền khôi phục với email đang mô phỏng bị chiếm.</p>
+<ol>
+  <li><button id="register" disabled>Đăng ký 1 khóa thử nghiệm</button></li>
+  <li><button id="assert" disabled>Xác nhận thao tác giả bằng khóa đã đăng ký</button></li>
+</ol>
+<p>Thao tác giả: EMAIL_CHANGE → readiness-only@example.test. Không gửi yêu cầu thay đổi email.</p>
+<p>Nhập PIN/sinh trắc học trực tiếp vào hộp thoại của thiết bị nếu được hỏi. Không gửi chúng vào chat.</p>
+<p id="status" role="status">Đang chuẩn bị phiên lab…</p>
+<script src="/lab/webauthn.js" defer></script>
+</body>
+</html>

@@ -844,8 +844,8 @@ public class OrderService {
     private User requireCustomer(Authentication authentication) {
         User user = requireUser(authentication);
         String authority = CurrentUserPrincipal.toAuthority(user.getRole());
-        if ("ROLE_ADMIN".equals(authority) || "ROLE_STAFF".equals(authority)) {
-            throw new AccessDeniedException("Nhan vien va quan tri vien khong duoc dat hang.");
+        if (!"ROLE_CUSTOMER".equals(authority)) {
+            throw new AccessDeniedException("Chi tai khoan khach hang duoc dat hang.");
         }
         return user;
     }

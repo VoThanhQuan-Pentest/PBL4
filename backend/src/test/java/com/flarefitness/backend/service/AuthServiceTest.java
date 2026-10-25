@@ -44,6 +44,7 @@ class AuthServiceTest {
     @Mock private PasswordResetTokenStore passwordResetTokenStore;
     @Mock private PasswordPolicy passwordPolicy;
     @Mock private AuditLogService auditLogService;
+    @Mock private com.flarefitness.backend.service.siem.SecurityEventService securityEventService;
 
     private AuthService authService;
 
@@ -60,7 +61,8 @@ class AuthServiceTest {
                 phoneNumberService,
                 passwordResetTokenStore,
                 passwordPolicy,
-                auditLogService);
+                auditLogService,
+                securityEventService);
     }
 
     @Test

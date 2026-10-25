@@ -20,6 +20,28 @@ public class EmailOtpService {
     public static final String PURPOSE_REGISTER = "REGISTER";
     public static final String PURPOSE_FORGOT_PASSWORD = "FORGOT_PASSWORD";
     public static final String PURPOSE_PROFILE_EMAIL = "PROFILE_EMAIL";
+    /** Separate namespace for the opt-in, test-only action-proof experiment. */
+    public static final String PURPOSE_LAB_ACTION_PROOF = "LAB_ACTION_PROOF";
+    public static final String PURPOSE_SENSITIVE_ACTION = "SENSITIVE_ACTION";
+
+    /** Account-wide failure budget survives resend/new challenges; successful OTPs keep the cooldown. */
+    private static final DefaultRedisScript<Long> VERIFY_SENSITIVE_ATOMICALLY = new DefaultRedisScript<>("""
+            local failures = tonumber(redis.call('GET', KEYS[2]) or '0')
+            if failures >= tonumber(ARGV[2]) then return 3 end
+            local code = redis.call('GET', KEYS[1])
+            if not code then return 0 end
+            if code == ARGV[1] then
+              redis.call('DEL', KEYS[1])
+              return 1
+            end
+            local attempts = redis.call('INCR', KEYS[2])
+            if attempts == 1 then redis.call('EXPIRE', KEYS[2], ARGV[3]) end
+            if attempts >= tonumber(ARGV[2]) then
+              redis.call('DEL', KEYS[1])
+              return 3
+            end
+            return 2
+            """, Long.class);
 
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
     private static final DefaultRedisScript<Long> VERIFY_OTP_ATOMICALLY = new DefaultRedisScript<>("""
@@ -80,7 +102,85 @@ public class EmailOtpService {
     }
 
     public void sendOtp(String purpose, String email) {
+        sendOtp(purpose, email, null);
+    }
+
+    public long sensitiveActionTtlSeconds() { return Math.max(1L, Math.min(300L, ttlSeconds)); }
+
+    public void sendSensitiveActionOtp(String email, String scope, String accountScope,
+            String operation, String targetEmail) {
+        requireSensitiveScope(scope, accountScope);
+        if (!"EMAIL_CHANGE".equals(operation) && !"PASSWORD_CHANGE".equals(operation)) {
+            throw new BadRequestException("Thao tac xac nhan khong hop le.");
+        }
+        if (targetEmail != null && (targetEmail.length() > 150 || targetEmail.contains("\r") || targetEmail.contains("\n"))) {
+            throw new BadRequestException("Dia chi dich khong hop le.");
+        }
+        String recipient = normalizeEmail(email);
+        if (recipient.contains("\r") || recipient.contains("\n")) throw new BadRequestException("Email khong hop le.");
+        String description = "EMAIL_CHANGE".equals(operation)
+                ? "doi email tai khoan sang " + normalizeEmail(targetEmail) : "doi mat khau tai khoan";
+        String namespace = PURPOSE_SENSITIVE_ACTION + ":" + accountScope;
+        String failureKey = attemptKey(namespace, recipient);
+        assertMailConfigured();
+        String failures = redisTemplate.opsForValue().get(failureKey);
+        int maximumAttempts = Math.max(1, Math.min(5, maxVerificationAttempts));
+        if (failures != null && Long.parseLong(failures) >= maximumAttempts) {
+            throw new TooManyRequestsException("Xac nhan dang tam khoa do nhap sai qua nhieu lan.");
+        }
+        String cooldown = cooldownKey(namespace, recipient);
+        if (!Boolean.TRUE.equals(redisTemplate.opsForValue().setIfAbsent(cooldown, "1",
+                Duration.ofSeconds(Math.max(60L, cooldownSeconds))))) {
+            throw new TooManyRequestsException("Vui long doi truoc khi gui lai ma xac nhan.");
+        }
+        String key = otpKey(PURPOSE_SENSITIVE_ACTION + ":" + scope, recipient);
+        String code = generateOtpCode();
+        redisTemplate.opsForValue().set(key, code, Duration.ofSeconds(sensitiveActionTtlSeconds()));
+        SimpleMailMessage message = new SimpleMailMessage();
+        message.setFrom(fromAddress);
+        message.setTo(recipient);
+        message.setSubject("Xac nhan thao tac tai khoan Flare Fitness");
+        message.setText("Ban dang yeu cau " + description + ".\nMa xac nhan rieng cho thao tac nay: "
+                + code + "\nMa het han sau " + sensitiveActionTtlSeconds()
+                + " giay. Khong chia se ma. Neu khong yeu cau thao tac nay, khong xac nhan.");
+        try {
+            mailSender.send(message);
+        } catch (MailException exception) {
+            redisTemplate.delete(key);
+            redisTemplate.delete(cooldown);
+            // Never clear the account failure budget on delivery failure/resend.
+            throw new BadRequestException("Khong gui duoc ma xac nhan. Thao tac chua duoc thuc hien.");
+        }
+    }
+
+    public void verifySensitiveActionOtp(String email, String scope, String accountScope, String code) {
+        requireSensitiveScope(scope, accountScope);
+        if (code == null || !code.matches("\\d{6}")) throw new BadRequestException("Ma xac nhan phai gom 6 so.");
+        String recipient = normalizeEmail(email);
+        Long result = redisTemplate.execute(VERIFY_SENSITIVE_ATOMICALLY,
+                List.of(otpKey(PURPOSE_SENSITIVE_ACTION + ":" + scope, recipient),
+                        attemptKey(PURPOSE_SENSITIVE_ACTION + ":" + accountScope, recipient)),
+                code, Integer.toString(Math.max(1, Math.min(5, maxVerificationAttempts))), "300");
+        if (result != null && result == 1L) return;
+        if (result != null && result == 3L) throw new TooManyRequestsException("Xac nhan dang tam khoa do nhap sai qua nhieu lan.");
+        throw new com.flarefitness.backend.exception.ActionConfirmationCodeException();
+    }
+
+    private void requireSensitiveScope(String scope, String accountScope) {
+        if (scope == null || !scope.matches("[0-9a-f]{64}")
+                || accountScope == null || !accountScope.matches("[0-9a-f]{64}")) {
+            throw new BadRequestException("Pham vi xac nhan khong hop le.");
+        }
+    }
+
+    public void sendLabActionProofOtp(String email, String serverScopeSha256) {
+        if (serverScopeSha256 == null) throw new BadRequestException("Pham vi OTP khong hop le.");
+        sendOtp(PURPOSE_LAB_ACTION_PROOF, email, serverScopeSha256);
+    }
+
+    private void sendOtp(String purpose, String email, String scope) {
         String normalizedPurpose = normalizePurpose(purpose);
+        String storagePurpose = scopedPurpose(normalizedPurpose, scope);
         String normalizedEmail = normalizeEmail(email);
         assertMailConfigured();
 
@@ -92,8 +192,8 @@ public class EmailOtpService {
         }
 
         String otpCode = generateOtpCode();
-        redisTemplate.opsForValue().set(otpKey(normalizedPurpose, normalizedEmail), otpCode, Duration.ofSeconds(ttlSeconds));
-        redisTemplate.delete(attemptKey(normalizedPurpose, normalizedEmail));
+        redisTemplate.opsForValue().set(otpKey(storagePurpose, normalizedEmail), otpCode, Duration.ofSeconds(ttlSeconds));
+        redisTemplate.delete(attemptKey(storagePurpose, normalizedEmail));
 
         SimpleMailMessage message = new SimpleMailMessage();
         message.setFrom(fromAddress);
@@ -104,15 +204,25 @@ public class EmailOtpService {
         try {
             mailSender.send(message);
         } catch (MailException exception) {
-            redisTemplate.delete(otpKey(normalizedPurpose, normalizedEmail));
+            redisTemplate.delete(otpKey(storagePurpose, normalizedEmail));
             redisTemplate.delete(cooldownKey);
-            redisTemplate.delete(attemptKey(normalizedPurpose, normalizedEmail));
+            redisTemplate.delete(attemptKey(storagePurpose, normalizedEmail));
             throw new BadRequestException("Khong the gui OTP qua email. Hay kiem tra cau hinh Gmail/App Password.");
         }
     }
 
     public void verifyOtp(String purpose, String email, String otpCode) {
+        verifyOtp(purpose, email, otpCode, null);
+    }
+
+    public void verifyLabActionProofOtp(String email, String serverScopeSha256, String otpCode) {
+        if (serverScopeSha256 == null) throw new BadRequestException("Pham vi OTP khong hop le.");
+        verifyOtp(PURPOSE_LAB_ACTION_PROOF, email, otpCode, serverScopeSha256);
+    }
+
+    private void verifyOtp(String purpose, String email, String otpCode, String scope) {
         String normalizedPurpose = normalizePurpose(purpose);
+        String storagePurpose = scopedPurpose(normalizedPurpose, scope);
         String normalizedEmail = normalizeEmail(email);
         String normalizedCode = String.valueOf(otpCode == null ? "" : otpCode).trim();
 
@@ -120,8 +230,8 @@ public class EmailOtpService {
             throw new BadRequestException("Ma OTP khong hop le.");
         }
 
-        String key = otpKey(normalizedPurpose, normalizedEmail);
-        String attemptKey = attemptKey(normalizedPurpose, normalizedEmail);
+        String key = otpKey(storagePurpose, normalizedEmail);
+        String attemptKey = attemptKey(storagePurpose, normalizedEmail);
         Long result = redisTemplate.execute(
                 VERIFY_OTP_ATOMICALLY,
                 List.of(key, attemptKey, cooldownKey(normalizedPurpose, normalizedEmail)),
@@ -146,6 +256,7 @@ public class EmailOtpService {
     }
 
     private String buildSubject(String purpose) {
+        if (PURPOSE_LAB_ACTION_PROOF.equals(purpose)) return "Ma xac nhan thao tac thu nghiem Flare Fitness";
         if (PURPOSE_REGISTER.equals(purpose)) {
             return "Ma OTP dang ky tai khoan Flare Fitness";
         }
@@ -161,6 +272,8 @@ public class EmailOtpService {
             action = "dang ky tai khoan";
         } else if (PURPOSE_PROFILE_EMAIL.equals(purpose)) {
             action = "xac nhan email moi";
+        } else if (PURPOSE_LAB_ACTION_PROOF.equals(purpose)) {
+            action = "xac nhan thao tac thu nghiem";
         } else {
             action = "dat lai mat khau";
         }
@@ -195,10 +308,19 @@ public class EmailOtpService {
         String normalized = String.valueOf(purpose == null ? "" : purpose).trim().toUpperCase(Locale.ROOT);
         if (!PURPOSE_REGISTER.equals(normalized)
                 && !PURPOSE_FORGOT_PASSWORD.equals(normalized)
-                && !PURPOSE_PROFILE_EMAIL.equals(normalized)) {
+                && !PURPOSE_PROFILE_EMAIL.equals(normalized)
+                && !PURPOSE_LAB_ACTION_PROOF.equals(normalized)) {
             throw new BadRequestException("Loai OTP khong hop le.");
         }
         return normalized;
+    }
+
+    private String scopedPurpose(String purpose, String scope) {
+        if (scope == null) return purpose;
+        if (!PURPOSE_LAB_ACTION_PROOF.equals(purpose) || !scope.matches("[0-9a-f]{64}")) {
+            throw new BadRequestException("Pham vi OTP khong hop le.");
+        }
+        return purpose + ":" + scope;
     }
 
     private String normalizeEmail(String email) {

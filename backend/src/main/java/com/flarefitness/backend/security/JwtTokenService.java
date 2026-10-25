@@ -1,11 +1,14 @@
 package com.flarefitness.backend.security;
 
+import com.flarefitness.backend.service.siem.UebaSessionTelemetry;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Date;
+import java.util.Optional;
+import java.util.UUID;
 import javax.crypto.SecretKey;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -41,6 +44,9 @@ public class JwtTokenService {
                 .subject(principal.getUsername())
                 .claim("role", principal.getUser().getRole())
                 .claim("user_id", principal.getUser().getId())
+                .claim("auth_version", principal.getUser().getAuthVersion() == null
+                        ? 0L : principal.getUser().getAuthVersion())
+                .id(UUID.randomUUID().toString())
                 .issuedAt(Date.from(now))
                 .expiration(Date.from(expiresAt))
                 .signWith(secretKey)
@@ -51,8 +57,35 @@ public class JwtTokenService {
         return extractClaims(token).getSubject();
     }
 
+    public String extractUserId(String token) {
+        return extractClaims(token).get("user_id", String.class);
+    }
+
+    public long extractAuthVersion(String token) {
+        Object value = extractClaims(token).get("auth_version");
+        return value instanceof Number number ? number.longValue() : 0L;
+    }
+
+    /** Claim provenance only: this does not authenticate or allowlist the session. */
+    public Instant verifiedIssuedAt(String token) {return extractClaims(token).getIssuedAt().toInstant();}
+
     public long getExpirationSeconds() {
         return expirationSeconds;
+    }
+
+    /** Additive telemetry only; caller must finish allowlist/account checks before attaching it. */
+    public Optional<UebaSessionTelemetry> extractSessionTelemetry(String token, String actorId) {
+        if (token == null || token.length() > 16_384) return Optional.empty();
+        try {
+            Claims claims = extractClaims(token);
+            if (!java.util.Objects.equals(actorId, claims.get("user_id", String.class))) return Optional.empty();
+            Date issuedAt = claims.getIssuedAt();
+            return UebaSessionTelemetry.fromVerifiedClaims(actorId, claims.getId(),
+                    issuedAt == null ? null : issuedAt.toInstant());
+        } catch (Exception invalidMetadata) {
+            // Invalid/missing legacy metadata never changes authentication or leaks claim values.
+            return Optional.empty();
+        }
     }
 
     public boolean isValid(String token) {

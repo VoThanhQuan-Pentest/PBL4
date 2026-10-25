@@ -1,0 +1,20 @@
+CREATE TABLE siem_ueba_model_jobs (
+    id VARCHAR(64) NOT NULL,
+    worker_job_id VARCHAR(64) NOT NULL,
+    model_version VARCHAR(64) NOT NULL,
+    requested_by_user_id VARCHAR(64) NOT NULL,
+    training_from DATETIME(6) NOT NULL,
+    training_to DATETIME(6) NOT NULL,
+    training_windows INT NOT NULL,
+    calibration_windows INT NOT NULL,
+    status VARCHAR(24) NOT NULL,
+    activated_at DATETIME(6) NULL,
+    activated_by_user_id VARCHAR(64) NULL,
+    ngay_tao DATETIME(6) NOT NULL,
+    updated_at DATETIME(6) NOT NULL,
+    version BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (id),
+    CONSTRAINT uk_siem_ueba_worker_job UNIQUE (worker_job_id),
+    CONSTRAINT uk_siem_ueba_model_version UNIQUE (model_version),
+    INDEX idx_siem_ueba_jobs_created (ngay_tao)
+) ENGINE=InnoDB;

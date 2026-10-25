@@ -216,7 +216,7 @@ public class PromoHuntService {
             throw new UnauthorizedException("Ban can dang nhap de san khuyen mai.");
         }
         String authority = CurrentUserPrincipal.toAuthority(user.getRole());
-        if ("ROLE_ADMIN".equals(authority) || "ROLE_STAFF".equals(authority)) {
+        if (!"ROLE_CUSTOMER".equals(authority)) {
             throw new AccessDeniedException("Tai khoan nhan vien va quan tri vien chi duoc xem san khuyen mai.");
         }
         return user;

@@ -2,6 +2,8 @@ package com.flarefitness.backend.config;
 
 import com.flarefitness.backend.security.JwtAuthenticationFilter;
 import com.flarefitness.backend.security.BcryptSha256PasswordEncoder;
+import com.flarefitness.backend.security.IpAddressResolver;
+import com.flarefitness.backend.service.siem.SecurityEventService;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -19,6 +21,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
+import org.springframework.security.web.csrf.CsrfException;
 import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
 
 @Configuration
@@ -42,6 +45,8 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(
             HttpSecurity http,
+            SecurityEventService securityEventService,
+            IpAddressResolver ipAddressResolver,
             @org.springframework.beans.factory.annotation.Value("${app.security.auth-cookie-secure}") boolean cookieSecure
     ) throws Exception {
         CookieCsrfTokenRepository csrfRepository = CookieCsrfTokenRepository.withHttpOnlyFalse();
@@ -50,7 +55,10 @@ public class SecurityConfig {
         http
                 .csrf(csrf -> csrf
                         .csrfTokenRepository(csrfRepository)
-                        .csrfTokenRequestHandler(csrfRequestHandler))
+                        .csrfTokenRequestHandler(csrfRequestHandler)
+                        // Non-browser service authentication is enforced by the internal
+                        // controller's constant-time token comparison.
+                        .ignoringRequestMatchers("/internal/v1/prevention/ack"))
                 .cors(Customizer.withDefaults())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .exceptionHandling(exceptions -> exceptions
@@ -60,14 +68,25 @@ public class SecurityConfig {
                                         HttpStatus.UNAUTHORIZED,
                                         "UNAUTHORIZED",
                                         "Can dang nhap de truy cap tai nguyen nay."))
-                        .accessDeniedHandler((request, response, exception) ->
+                        .accessDeniedHandler((request, response, exception) -> {
+                            if (exception instanceof CsrfException) {
                                 securityErrorResponseWriter.write(
                                         response,
                                         HttpStatus.FORBIDDEN,
-                                        "FORBIDDEN",
-                                        "Ban khong co quyen truy cap tai nguyen nay.")))
+                                        "CSRF_INVALID",
+                                        "Phien bao mat da thay doi. Vui long thu lai.");
+                                return;
+                            }
+                            securityErrorResponseWriter.write(
+                                    response,
+                                    HttpStatus.FORBIDDEN,
+                                    "FORBIDDEN",
+                                    "Ban khong co quyen truy cap tai nguyen nay.");
+                        }))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/actuator/health", "/api/health").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/internal/v1/prevention/policy").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/internal/v1/prevention/ack").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/auth/csrf").permitAll()
                         .requestMatchers(HttpMethod.POST,
                                 "/api/auth/login",
@@ -85,6 +104,7 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/sync/app/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/promo-hunt/campaigns/*/claim").authenticated()
                         .requestMatchers(HttpMethod.POST, "/api/reviews").authenticated()
+                        .requestMatchers("/api/siem/**").hasAnyAuthority("ROLE_ADMIN", "ROLE_SOC_L1", "ROLE_SOC_L2")
                         .requestMatchers(HttpMethod.GET, "/api/reviews", "/api/reviews/page").hasAnyAuthority("ROLE_ADMIN", "ROLE_STAFF")
                         .requestMatchers(HttpMethod.PATCH, "/api/reviews/*").hasAnyAuthority("ROLE_ADMIN", "ROLE_STAFF")
                         .requestMatchers(HttpMethod.DELETE, "/api/reviews/*").hasAnyAuthority("ROLE_ADMIN", "ROLE_STAFF")
@@ -107,7 +127,9 @@ public class SecurityConfig {
                         .anyRequest().authenticated()
                 )
                 .authenticationProvider(authenticationProvider())
-                .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
+                .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
+                .addFilterAfter(new SecurityEventFilter(securityEventService, ipAddressResolver),
+                        JwtAuthenticationFilter.class);
 
         return http.build();
     }

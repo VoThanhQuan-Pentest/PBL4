@@ -6,7 +6,13 @@ tmp_index.html
 tmp_style.css
 tmp_main.js
 .env
+.env.*
+!.env*.example
+*.local.md
 backend/target/
+desktop-client/target/
+__pycache__/
+*.pyc
 frontend/node_modules/
 frontend/dist/
 frontend/coverage/
@@ -20,6 +26,7 @@ tmp_vn_units*.json
 *.tfstate.*
 terraform.tfvars
 terraform.tfvars.json
+*.tfplan
 *.pem
 *.key
 *.p12
@@ -28,3 +35,8 @@ terraform.tfvars.json
 observability/runtime/
 observability/data/
 nginx-logs/
+# Local verification output, database snapshots and generated presentation files.
+# Keep source/runbooks; do not publish machine-specific acceptance data.
+audit-results/
+docs/delivery/
+docs/evidence/demo/
