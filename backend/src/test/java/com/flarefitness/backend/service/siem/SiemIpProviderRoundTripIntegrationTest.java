@@ -21,10 +21,19 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 @SpringBootTest(properties = "siem.prevention.enabled=false")
+@org.springframework.transaction.annotation.Transactional
 class SiemIpProviderRoundTripIntegrationTest extends ContainerizedIntegrationTest {
     @Autowired private JdbcTemplate jdbc;
     @Autowired private ObjectMapper mapper;
     @TempDir Path temporarySecrets;
+
+    @org.junit.jupiter.api.BeforeEach
+    void isolateTheManualWorkerQueueWithinTheRolledBackTestTransaction() {
+        // Other test contexts use the shared Testcontainers database. Hide
+        // their pending fixtures only within this transaction; rollback restores
+        // them and also removes this test's requests/cache/attempt records.
+        jdbc.update("UPDATE siem_ip_lookup_requests SET status='DONE' WHERE status IN ('PENDING','RUNNING')");
+    }
 
     @Test
     void fixedProviderRequestsPersistFreshEvidenceAndReuseCache() throws Exception {

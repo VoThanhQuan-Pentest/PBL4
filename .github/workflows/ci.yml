@@ -93,6 +93,15 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+      - name: Upload backend test diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: backend-test-results
+          path: backend/target/surefire-reports
+          if-no-files-found: ignore
+          retention-days: 14
+
   desktop-client:
     name: JavaFX SIEM client
     runs-on: ubuntu-24.04
@@ -116,16 +125,31 @@ jobs:
         run: xvfb-run -a -s '-screen 0 1920x1080x24' ./scripts/package-linux.sh
       - name: Smoke-test the packaged executable at laptop and desktop sizes
         env:
-          APPLICATION_IMAGE: ${{ steps.package.outputs.application_image }}
+          APPLICATION_ARCHIVE: ${{ steps.package.outputs.application_archive }}
         run: |
-          xvfb-run -a -s '-screen 0 1366x768x24' ./scripts/smoke-linux.sh "$APPLICATION_IMAGE"
-          xvfb-run -a -s '-screen 0 1920x1080x24' ./scripts/smoke-linux.sh "$APPLICATION_IMAGE"
+          set -Eeuo pipefail
+          (cd "$(dirname "$APPLICATION_ARCHIVE")" && sha256sum -c "$(basename "$APPLICATION_ARCHIVE").sha256")
+          extracted_image="$(mktemp -d)"
+          trap 'rm -rf -- "$extracted_image"' EXIT
+          tar -xzf "$APPLICATION_ARCHIVE" -C "$extracted_image"
+          xvfb-run -a -s '-screen 0 1366x768x24' ./scripts/smoke-linux.sh "$extracted_image/FlareSecurityMonitor"
+          xvfb-run -a -s '-screen 0 1920x1080x24' ./scripts/smoke-linux.sh "$extracted_image/FlareSecurityMonitor"
       - name: Upload the tested application image
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: flare-soc-linux-${{ github.sha }}
-          path: ${{ steps.package.outputs.application_image }}
+          path: |
+            ${{ steps.package.outputs.application_archive }}
+            ${{ steps.package.outputs.application_archive }}.sha256
           if-no-files-found: error
+          retention-days: 14
+      - name: Upload desktop test diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: desktop-test-results
+          path: desktop-client/target/dist-release.*/test-reports
+          if-no-files-found: ignore
           retention-days: 14
 
   prevention-gateway:

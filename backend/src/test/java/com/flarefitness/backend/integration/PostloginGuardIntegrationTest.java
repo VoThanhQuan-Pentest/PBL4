@@ -210,7 +210,10 @@ class PostloginGuardIntegrationTest extends ContainerizedIntegrationTest {
             var c=body(send(owner,"POST","/api/profile/action-confirmations",passwordRequest(),200));
             String path="/api/profile/action-confirmations/"+c.path("id").asText()+"/execute",rid=java.util.UUID.randomUUID().toString();
             jdbc.execute("ALTER TABLE sensitive_action_confirmations ADD CONSTRAINT pl_reject_commit CHECK (user_id<>'pl-integ-db-fault' OR state<>'COMMITTED')");
-            try { send(owner,"POST",path,executeBody(delivered.get(user.getEmail()),rid),500); }
+            try {
+                var rejected=send(owner,"POST",path,executeBody(delivered.get(user.getEmail()),rid),400);
+                assertThat(body(rejected).path("code").asText()).isEqualTo("DATA_CONSTRAINT_VIOLATION");
+            }
             finally { jdbc.execute("ALTER TABLE sensitive_action_confirmations DROP CHECK pl_reject_commit"); }
             var unchanged=users.findById(user.getId()).orElseThrow();
             assertThat(unchanged.getPassword()).isEqualTo(user.getPassword());

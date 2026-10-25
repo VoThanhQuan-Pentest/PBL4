@@ -91,7 +91,7 @@ class DashboardFxmlSmokeTest {
                 finished.countDown();
             }
         });
-        assumeTrue(finished.await(30, TimeUnit.SECONDS), "JavaFX render timed out");
+        org.junit.jupiter.api.Assertions.assertTrue(finished.await(30, TimeUnit.SECONDS), "JavaFX render timed out");
         if (failure.get() != null) throw new AssertionError("JavaFX dashboard render failed", failure.get());
     }
 }

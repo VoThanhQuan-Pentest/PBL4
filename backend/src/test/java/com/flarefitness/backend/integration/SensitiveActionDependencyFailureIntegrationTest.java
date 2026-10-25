@@ -48,9 +48,17 @@ class SensitiveActionDependencyFailureIntegrationTest extends SensitiveActionCon
             var payload=Map.of("confirmation_code",code,"destination_otp_code",delivered.get(target));
             String path="/api/profile/action-confirmations/"+id+"/execute",csrf=csrf(owner);
             doAnswer(invocation->{
-                calls.incrementAndGet();Object result=invocation.callRealMethod();committed.countDown();
-                release.await(10,java.util.concurrent.TimeUnit.SECONDS);return result;
-            }).when(actionExecution).execute(any(),anyString(),any());
+                calls.incrementAndGet();
+                // The HTTP controller uses the four-argument overload. Its
+                // TransactionTemplate has committed before the real method returns.
+                Object result=invocation.callRealMethod();
+                assertThat(org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+                String executedId=invocation.getArgument(1);
+                assertThat(actions.findById(executedId).orElseThrow().getState()).isEqualTo("COMMITTED");
+                committed.countDown();
+                release.await(10,java.util.concurrent.TimeUnit.SECONDS);
+                return result;
+            }).when(actionExecution).execute(any(),anyString(),any(),any());
             var store=((java.net.CookieManager)owner.http.cookieHandler().orElseThrow()).getCookieStore();
             String cookies=store.getCookies().stream().map(c->c.getName()+"="+c.getValue()).collect(java.util.stream.Collectors.joining("; "));
             // Authenticated, CSRF-valid request cut off in the JSON body before

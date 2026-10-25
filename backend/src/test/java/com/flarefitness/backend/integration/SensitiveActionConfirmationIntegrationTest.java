@@ -105,8 +105,10 @@ class SensitiveActionConfirmationIntegrationTest extends ContainerizedIntegratio
             jdbc.execute("ALTER TABLE sensitive_action_confirmations ADD CONSTRAINT lab_reject_confirmation_commit "
                     + "CHECK (user_id <> 'confirmation-db-fault' OR state <> 'COMMITTED')");
             try {
-                var failure = send(owner, "POST", "/api/profile/action-confirmations/" + id + "/execute", Map.of("confirmation_code", code), 500);
-                assertThat(body(failure).path("code").asText()).isEqualTo("INTERNAL_ERROR");
+                // Hibernate 7 translates this CHECK rejection to the API's
+                // existing, sanitized DataIntegrityViolationException contract.
+                var failure = send(owner, "POST", "/api/profile/action-confirmations/" + id + "/execute", Map.of("confirmation_code", code), 400);
+                assertThat(body(failure).path("code").asText()).isEqualTo("DATA_CONSTRAINT_VIOLATION");
             } finally {
                 jdbc.execute("ALTER TABLE sensitive_action_confirmations DROP CHECK lab_reject_confirmation_commit");
             }

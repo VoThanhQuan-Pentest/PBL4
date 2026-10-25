@@ -25,6 +25,9 @@ output_root=$(mktemp -d "$ROOT_DIR/target/dist-release.XXXXXXXX")
 cleanup() {
   status=$?
   trap - EXIT
+  if [ -d "$build_root/target/surefire-reports" ]; then
+    cp -a "$build_root/target/surefire-reports" "$output_root/test-reports"
+  fi
   case "${build_root:-}" in
     "$ROOT_DIR/target/package-build."*) rm -rf -- "$build_root" ;;
   esac
@@ -52,7 +55,14 @@ jpackage \
   --main-jar flare-security-monitor-0.1.0-SNAPSHOT.jar \
   --main-class com.flarefitness.monitor.Launcher
 
+archive="$output_root/FlareSecurityMonitor-linux.tar.gz"
+tar -C "$output_root" -czf "$archive" FlareSecurityMonitor
+(
+  cd "$output_root"
+  sha256sum FlareSecurityMonitor-linux.tar.gz > FlareSecurityMonitor-linux.tar.gz.sha256
+)
 printf 'Linux application image: %s\n' "$output_root/FlareSecurityMonitor"
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
   printf 'application_image=%s\n' "$output_root/FlareSecurityMonitor" >> "$GITHUB_OUTPUT"
+  printf 'application_archive=%s\n' "$archive" >> "$GITHUB_OUTPUT"
 fi

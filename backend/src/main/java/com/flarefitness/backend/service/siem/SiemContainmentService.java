@@ -83,7 +83,7 @@ public class SiemContainmentService {
             """,actionId,request.requestId(),id,target.getId(),actor.getId(),request.reason().trim(),
                 minutes==null ? "UNTIL_REVOKED" : "TEMPORARY",until,now);
         incident.setUpdatedAt(now); incidents.saveAndFlush(incident);
-        history(id,actor,"ACCOUNT_ISOLATED",request.reason());
+        history(id,actor,"ACCOUNT_ISOLATED",request.reason(),"APPLIED");
         // DB auth_version invalidates old tokens even if Redis is unavailable after commit.
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override public void afterCommit() { try { tokens.revokeAll(target.getUsername()); }
@@ -116,7 +116,7 @@ public class SiemContainmentService {
         }
         jdbc.update("UPDATE siem_containment_actions SET status='RELEASED',released_at=?,release_request_id=?,release_reason=?,release_actor_user_id=?,version=version+1 WHERE id=?",LocalDateTime.now(ZoneOffset.UTC),request.requestId(),request.reason().trim(),actor.getId(),id);
         incident.setUpdatedAt(LocalDateTime.now(ZoneOffset.UTC));incidents.saveAndFlush(incident);
-        history(action.incidentId,actor,"ACCOUNT_ISOLATION_RELEASED",request.reason());
+        history(action.incidentId,actor,"ACCOUNT_ISOLATION_RELEASED",request.reason(),"RELEASED");
         return query("SELECT * FROM siem_containment_actions WHERE id=?",id).getFirst();
     }
     public record Verification(@NotBlank @Size(max=64) String requestId,@NotNull Long expectedVersion,
@@ -147,7 +147,7 @@ public class SiemContainmentService {
         incident.setResponseVerifiedAt(now);incident.setRecoveryVerifiedAt(now);
         incident.setResponseVerificationVersion(incident.getVersion()+1);incident.setUpdatedAt(now);incidents.saveAndFlush(incident);
         jdbc.update("INSERT INTO siem_response_requests (request_id,actor_user_id,target_id,reason,outcome,created_at) VALUES (?,?,?,?,?,?)",request.requestId(),actor.getId(),id,request.reason().trim(),outcome,now);
-        history(id,actor,"RESPONSE_RECOVERY_VERIFIED",outcome+": "+request.reason().trim());
+        history(id,actor,"RESPONSE_RECOVERY_VERIFIED",outcome+": "+request.reason().trim(),outcome);
     }
 
     private SiemIncident assigned(String id, Long version, User actor) {
@@ -167,10 +167,10 @@ public class SiemContainmentService {
     private static void validateReason(String reason) {
         if(reason==null || reason.trim().length()<10 || reason.trim().length()>2000) throw new BadRequestException("A specific reason is required.");
     }
-    private void history(String incident,User actor,String action,String reason) {
+    private void history(String incident,User actor,String action,String reason,String newValue) {
         String detail=("ROLE_ADMIN".equals(CurrentUserPrincipal.toAuthority(actor.getRole())) ? "ADMIN_OVERRIDE: " : "")+reason.trim();
-        jdbc.update("INSERT INTO siem_incident_history (id,incident_id,actor_user_id,action,detail,ngay_tao) VALUES (?,?,?,?,?,?)",
-                "siem-history-"+UUID.randomUUID(),incident,actor.getId(),action,detail,LocalDateTime.now(ZoneOffset.UTC));
+        jdbc.update("INSERT INTO siem_incident_history (id,incident_id,actor_user_id,action,new_value,detail,ngay_tao) VALUES (?,?,?,?,?,?,?)",
+                "siem-history-"+UUID.randomUUID(),incident,actor.getId(),action,newValue,detail,LocalDateTime.now(ZoneOffset.UTC));
         audit.success(action,actor.getId(),null,"SIEM_INCIDENT",incident);
     }
     private List<Action> query(String sql,Object... args) {
