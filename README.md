@@ -2,19 +2,68 @@
 
 Flare Fitness là hệ thống thương mại điện tử dành cho sản phẩm thể thao, được
 xây dựng trong khuôn khổ PBL4. Repository không chỉ chứa ứng dụng bán hàng mà
-còn tập trung vào ba mục tiêu kỹ thuật:
+còn tập trung vào bốn mục tiêu kỹ thuật:
 
 1. Xây dựng đầy đủ luồng nghiệp vụ khách hàng, nhân viên và quản trị viên.
 2. Bảo vệ ứng dụng từ trình duyệt, reverse proxy, API đến dữ liệu và secret.
 3. Thu thập, phân tích và trực quan hóa Nginx access log bằng Elastic Stack.
+4. Cung cấp ứng dụng desktop JavaFX để analyst xử lý incident theo mô hình
+   Client–Server, với phân loại nhiễu cơ bản và lịch sử thao tác tập trung.
 
 Ứng dụng có thể chạy độc lập bằng Docker Compose. Nginx phục vụ frontend Vite
 đã build và reverse proxy `/api` đến Spring Boot; backend sử dụng MySQL cho dữ
 liệu nghiệp vụ và Redis cho token, OTP, rate limit cùng trạng thái ngắn hạn.
 
+## Trạng thái bản local — 25/10/2026
+
+Bản SIEM/SOC R2 đã được triển khai và nghiệm thu chức năng trong lab:
+
+- Một stack `flare-otp-local` phục vụ website, SOC và pipeline ELK, giữ nguyên
+  database, tài khoản, OTP/mail và các ca demo hiện có.
+- Website qua gateway tại `http://127.0.0.1:8088`; SOC/recovery API tại
+  `http://127.0.0.1:8089`; Kibana tại `http://127.0.0.1:5601`.
+- JavaFX có đúng năm mục: **Dashboard**, **Incident queue**, **Block IP**,
+  **History**, **GeoIP & IP intelligence**. Login chỉ chứa logo và form.
+- Hàng đợi hiển thị tên tình huống ngắn gọn, IP nguồn, người nhận theo
+  tên–vai trò và thời gian sự kiện. Ca thực hành được ghi rõ nguồn fixture.
+- Một cửa sổ incident được dùng lại, hỗ trợ phóng to/toàn màn hình bằng F11.
+  Hai tab là **Thông tin log** và **Dòng thời gian log**; xử lý nằm dưới thông
+  tin, lịch sử xử lý SOC chỉ xuất hiện khi ca đã đóng.
+- Evidence ELK giữ nguyên cấu trúc Elasticsearch hit và `_source`; Fields/JSON,
+  tìm kiếm, copy và export không trộn workflow/model vào log gốc. Thời gian log
+  và metadata liên kết được xử lý riêng; thiếu bằng chứng được hiển thị rõ.
+- Sáu nhóm điều tra auth/session gồm brute force đăng nhập, password spraying,
+  chuỗi đăng nhập–thao tác nhạy cảm, phiên bất thường, lạm dụng OTP và tái sử dụng
+  phiên đã thu hồi. L2/Admin có thao tác cô lập tài khoản khách theo incident.
+- Chính sách tái phạm IP hỗ trợ 15 phút, 1 giờ, 24 giờ và đến khi gỡ; mức không
+  hết hạn chỉ dùng bằng chứng signature ACTIVE đã kiểm thử và gateway ACK.
+
+Model baseline schema 6/65 feature giữ phạm vi `PROJECT_LIMITED`, allowlist,
+OTP độc lập và hold tối đa 600 giây. Candidate schema 7/81 feature chỉ chạy
+`PILOT_ONLY / SHADOW`, không tự tạo hold, chặn IP hoặc cô lập tài khoản.
+Kết quả lab không chứng minh qualification production strict hay độ chính xác
+trên toàn bộ người dùng. Rà soát security toàn repository đang được tiếp tục;
+không coi bản này là đã hoàn tất security audit.
+
+Kiểm chứng cho R2: 21 test backend liên quan qua; gói JavaFX chạy 172 test với
+6 test tùy chọn được bỏ qua và không có lỗi; 3 test UI trực tiếp L1/L2 và
+Fields/JSON chính xác đều qua. Đây là các kiểm tra đã chạy cho bản lab, không
+phải kết quả của toàn bộ CI trên một checkout mới.
+
+Repository chứa source, migration, contract và test. Database, model publication,
+capture/training data, secret, backup, file đăng nhập và receipt vận hành local
+không đưa lên Git. Checkout mới cần cấu hình và artifact riêng theo runbook;
+không chạy lại seed hoặc restore đè database đang dùng.
+
+Hướng dẫn: [JavaFX client](desktop-client/README.md),
+[SOC L1/L2](docs/LOCAL_SOC_DEMO_L1_L2.md),
+[workspace và auth pilot](docs/LOCAL_SOC_WORKSPACE_AUTH_PILOT.md),
+[postlogin project](docs/LOCAL_POSTLOGIN_PROJECT.md).
+
 ## Mục lục
 
 - [Dự án đang làm gì?](#dự-án-đang-làm-gì)
+- [Trạng thái bản local](#trạng-thái-bản-local--25102026)
 - [Chức năng chính](#chức-năng-chính)
 - [Kiến trúc hệ thống](#kiến-trúc-hệ-thống)
 - [Công nghệ sử dụng](#công-nghệ-sử-dụng)
@@ -46,7 +95,11 @@ Các phần đang được triển khai và kiểm chứng trong repository gồ
 - Flyway migration làm nguồn duy nhất cho cấu trúc database.
 - Docker Compose cho local development, integration test và E2E.
 - Nginx hardening, trusted proxy policy và security headers.
+- Gateway Go + Coraza/OWASP CRS đứng trước Nginx để kiểm tra request web;
+  mẫu chỉ chặn khi L2/Admin đã kiểm thử và kích hoạt.
 - Pipeline Nginx → Filebeat → Logstash → Elasticsearch → Kibana.
+- Flare Security Monitor (JavaFX) dùng API Spring Boot để xem log/GeoIP, nhận,
+  phân loại và xử lý incident từ nhiều máy khách.
 - GeoIP, dashboard, detection rule, disk queue và persistent queue.
 - Terraform và cloud-init cho mô hình Web EC2 + Monitor EC2 trên AWS.
 - CI kiểm tra test, coverage, dependency, container, IaC và supply chain.
@@ -90,23 +143,26 @@ Các phần đang được triển khai và kiểm chứng trong repository gồ
 
 ```mermaid
 flowchart LR
-    Browser[Trình duyệt] -->|HTTP/HTTPS| Nginx[Nginx edge]
+    Browser[Trình duyệt] -->|HTTP/HTTPS| Gateway[Gateway Go / Coraza]
+    Gateway --> Nginx[Nginx]
     Nginx -->|Static assets| Frontend[Frontend Vite]
     Nginx -->|/api| Backend[Spring Boot API]
     Backend --> MySQL[(MySQL 8.4)]
     Backend --> Redis[(Redis 7)]
     Backend --> SMTP[SMTP / Mailpit]
+    Desktop[JavaFX Security Monitor] -->|Cookie + CSRF / recovery listener| Gateway
 
     Nginx -->|JSON access log| Filebeat[Filebeat]
     Filebeat -->|mTLS| Logstash[Logstash]
     Logstash --> Elasticsearch[(Elasticsearch)]
     Elasticsearch --> Kibana[Kibana dashboards & rules]
+    Backend -->|Read-only HTTPS| Elasticsearch
 ```
 
 Luồng chính:
 
-1. Nginx là HTTP entry point duy nhất; container backend không publish cổng ra
-   ngoài trong base Compose.
+1. Sơ đồ mô tả stack có gateway. Base Compose phục vụ trực tiếp qua Nginx;
+   các overlay gateway bỏ cổng publish của Nginx. Backend dùng mạng nội bộ.
 2. Frontend và API dùng cùng origin để cookie xác thực và CSRF hoạt động đúng.
 3. Spring Boot kiểm tra xác thực/phân quyền trước khi gọi service và repository.
 4. Flyway cập nhật schema trước khi ứng dụng nhận traffic.
@@ -118,6 +174,7 @@ Luồng chính:
 | Lớp | Công nghệ | Vai trò |
 | --- | --- | --- |
 | Frontend | Vite 6, HTML, CSS, JavaScript ES modules | Giao diện người dùng và admin |
+| Desktop | JavaFX 21, FXML, CSS, Java HttpClient | Client SIEM cho security analyst |
 | Edge | Nginx stable Alpine | Static hosting, reverse proxy, header và access log |
 | Backend | Java 21, Spring Boot 3.5 | REST API và nghiệp vụ |
 | Security | Spring Security, JWT, BCrypt-SHA256, CSRF | Xác thực và phân quyền |
@@ -138,6 +195,7 @@ giảm rủi ro thay đổi ngoài ý muốn.
 .
 ├── backend/                    Spring Boot API, test và Flyway migration
 ├── frontend/                   Vite frontend, Vitest và Playwright
+├── desktop-client/             JavaFX SIEM client và Linux packaging script
 ├── nginx/                      Nginx image, proxy và security headers
 ├── observability/              Elastic Stack, PKI, dashboard, rule và runbook
 ├── terraform/                  AWS network, EC2, EBS và cloud-init templates
@@ -146,7 +204,6 @@ giảm rủi ro thay đổi ngoài ý muốn.
 ├── docker-compose.yml          Stack nền tảng
 ├── docker-compose.dev.yml      Development fixture profile
 ├── docker-compose.e2e.yml      E2E fixture và Mailpit
-├── PLAN_AWS_ELK.md             Kế hoạch triển khai AWS–ELK
 └── .github/workflows/          CI và full observability runtime workflow
 ```
 
@@ -193,10 +250,7 @@ Không thêm `--volumes` nếu muốn giữ dữ liệu development.
 
 `docker-compose.dev.yml` bật Spring profile `dev`. Repeatable Flyway fixture tạo:
 
-| Vai trò | Tài khoản | Mật khẩu |
-| --- | --- | --- |
-| Quản trị viên | `dev_admin` | `DevAdmin#2026!` |
-| Khách hàng | `dev_customer` | `DevCustomer#2026!` |
+Thông tin đăng nhập local được lưu trong `TAI_KHOAN_DANG_NHAP.local.md` trên máy vận hành; file này không đưa vào Git.
 
 Các tài khoản này chỉ dành cho local development. Base Compose không bật fixture
 và không tự tạo tài khoản, PII, đơn hàng hay sản phẩm demo.
@@ -342,6 +396,33 @@ GeoIP, detection alert, analyst role, queue recovery, logrotate continuity và
 khả năng giữ dữ liệu sau restart. Chi tiết vận hành nằm trong
 [observability/README.md](observability/README.md).
 
+### Ứng dụng SOC và UEBA (local)
+
+Ứng dụng JavaFX sử dụng API Spring Boot, không kết nối trực tiếp MySQL hay
+Elasticsearch. Backend ghi sự kiện bảo mật của khách hàng vào MySQL outbox;
+Filebeat chuyển bản NDJSON qua Logstash để Elasticsearch lưu trữ và bổ sung
+GeoIP cho IP công khai. Một job khác tổng hợp hành vi theo cửa sổ 15 phút.
+Worker Python chạy Isolation Forest trên 11 đặc trưng số, sau khi Admin huấn
+luyện và kích hoạt model ứng viên. Điểm số AI là độ bất thường tương đối,
+**không phải xác suất tài khoản bị xâm nhập**; quy tắc minh bạch vẫn hoạt động
+khi worker/model chưa sẵn sàng.
+
+Incident mới vào hàng đợi SOC L1. L1 nhận việc, ghi chú và chuyển ca đáng ngờ
+cho L2; L2 kết luận và, khi có căn cứ, chủ động thu hồi các phiên khách hàng.
+Hệ thống không tự khóa tài khoản. JavaFX có biểu đồ tròn về mức độ, trạng
+thái, phân loại, hàng đợi SOC và nguồn phát hiện, cùng watchlist tài khoản.
+Các tài khoản và event giả lập được gắn nhãn riêng; model huấn luyện hoàn toàn
+từ dữ liệu demo hiện rõ `DEMO_ONLY`. Quy trình seed, huấn luyện, kiểm chứng
+và lệnh chỉ chạy local nằm ở
+[hướng dẫn UEBA](observability/README.md#local-uebasoc-demo). Không bước nào
+trong quy trình này tự chạy AWS hoặc Terraform.
+
+Lớp phòng vệ local bổ sung kiểm tra toàn bộ HTTP trước Nginx, quản lý mẫu SQLi,
+XSS, traversal và đường dẫn qua vòng đời nháp/kiểm thử/L2 duyệt, ban IP có thời
+hạn, cùng tra cứu nền IPinfo/AbuseIPDB. IP reputation chỉ bổ sung bằng chứng;
+riêng cờ VPN/hosting hay một điểm bên ngoài không tự chặn người dùng. Môi
+trường mới không có mẫu chặn được kích hoạt cho đến khi SOC duyệt một mẫu.
+
 ## Bảo mật
 
 Các lớp bảo vệ chính của project:
@@ -352,7 +433,7 @@ Các lớp bảo vệ chính của project:
 - Mật khẩu được mã hóa bằng BCrypt-SHA256 cost 12.
 - JWT/token state lưu trong Redis dưới dạng fingerprint phù hợp thay vì coi
   browser token là session server truyền thống.
-- `ADMIN`, `STAFF`, `CUSTOMER` có quyền API tách biệt.
+- `ADMIN`, `STAFF`, `CUSTOMER`, `SOC L1`, `SOC L2` có quyền API tách biệt.
 - CORS production chỉ chấp nhận origin HTTPS cụ thể, không wildcard với cookie.
 - Nginx không tin `X-Forwarded-*` từ client; chỉ tin CIDR của TLS terminator ngay
   trước nó khi được cấu hình rõ.
@@ -461,6 +542,9 @@ workflow.
 
 ## AWS lab
 
+Runbook cho bản SOC/UEBA mới: [triển khai và nghiệm thu AWS](docs/aws-lab-implementation.md).
+Ma trận cloud [aws-acceptance.csv](docs/aws-acceptance.csv) chỉ chuyển sang PASS khi có bằng chứng thực tế.
+
 Mô hình AWS sử dụng hai EC2:
 
 - **Web EC2:** Nginx, Spring Boot, MySQL, Redis và Filebeat.
@@ -468,12 +552,20 @@ Mô hình AWS sử dụng hai EC2:
   trên EBS bind mount.
 
 Terraform, cloud-init và deploy scripts nằm trong `terraform/` và
-`observability/scripts/`. Hướng dẫn chi tiết: [PLAN_AWS_ELK.md](PLAN_AWS_ELK.md).
+`observability/scripts/`. Hướng dẫn chi tiết: [triển khai AWS hiện hành](docs/aws-lab-implementation.md).
+
+Lab không có NAT Gateway nên hai EC2 nhận public IPv4 ngay lúc launch để
+cloud-init tải package trước khi EIP ổn định được gắn. Subnet vẫn không tự cấp
+public IP cho instance khác. Contract này được khóa bằng `terraform test`.
 
 Đây là HTTP lab giới hạn bằng CIDR, không thay thế production deployment có ALB,
 ACM/TLS, managed database, backup/KMS và đầy đủ IAM/Security Group review. CI chỉ
-chạy `terraform fmt/init/validate` và scan tĩnh; không chạy `terraform apply` và
+chạy `terraform fmt/init/validate/test` và scan tĩnh; không chạy `terraform apply` và
 không tạo AWS resource.
+
+Sau khi chủ sở hữu triển khai thật và chạy đủ traffic, script đọc-only
+`observability/scripts/verify-aws-lab.sh` xác minh runtime và ghi evidence đã
+lọc secret vào `observability/runtime/aws-evidence-*`.
 
 Production cần tối thiểu:
 
@@ -490,7 +582,7 @@ Production cần tối thiểu:
 
 ## Tài liệu
 
-- [Kế hoạch AWS–ELK](PLAN_AWS_ELK.md)
+- [Triển khai và nghiệm thu AWS](docs/aws-lab-implementation.md)
 - [Runbook observability](observability/README.md)
 - [Báo cáo đánh giá đề tài](docs/bao-cao-danh-gia-de-tai-515.md)
 - [Phân tích cấu trúc, thuật toán và công nghệ](docs/phan-tich-cau-truc/README.md)

@@ -32,7 +32,7 @@ if ! kibana_curl -o /dev/null "${KIBANA_URL}/api/spaces/space/${SPACE_ID}" 2>/de
 fi
 
 kibana_curl -X POST -H 'Content-Type: application/json' \
-  --data-binary '{"override":true,"data_view":{"id":"flare-nginx-logs","name":"Flare Lab Nginx logs","title":"logs-nginx.*-lab","timeFieldName":"@timestamp","allowNoIndex":true}}' \
+  --data-binary '{"override":true,"data_view":{"id":"flare-nginx-logs","name":"Flare Lab logs","title":"logs-*-lab","timeFieldName":"@timestamp","allowNoIndex":true}}' \
   "${KIBANA_URL}/s/${SPACE_ID}/api/data_views/data_view" >/dev/null
 
 import_objects() {

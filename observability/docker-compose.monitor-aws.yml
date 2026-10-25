@@ -1,0 +1,6 @@
+# Only the AWS overlay publishes Elasticsearch, bound to the private interface.
+# Terraform separately restricts 9200 to the Web security group.
+services:
+  elasticsearch:
+    ports:
+      - "10.20.10.20:9200:9200"

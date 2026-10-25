@@ -1,0 +1,13 @@
+{
+  "region": "ap-southeast-1",
+  "instance_type": "m7i-flex.large",
+  "checked_at": "REPLACE_WITH_UTC_TIMESTAMP",
+  "source_url": "https://calculator.aws/",
+  "instance_hour": null,
+  "gp3_gb_month": null,
+  "snapshot_gb_month": null,
+  "ipv4_hour": null,
+  "egress_gb": null,
+  "tax_multiplier": null,
+  "assumptions": "Planning assumptions: 30 running hours per EC2, 10 retained days, up to 140 GB snapshot storage across the three existing volumes (actual storage may be lower because empty blocks are excluded), 5 GB egress, and a planning tax/surcharge multiplier that is not itself a verified tax rate."
+}

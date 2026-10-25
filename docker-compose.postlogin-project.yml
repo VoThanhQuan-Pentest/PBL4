@@ -1,0 +1,73 @@
+# Local project lab only; use postlogin_project_site.py with the existing OTP project.
+services:
+  app:
+    image: ${FLARE_POSTLOGIN_APP_IMAGE:?Verified project release required}
+    cpus: 1
+    mem_limit: 1g
+    group_add: ["1000"]
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xmx640m -XX:ActiveProcessorCount=1"
+      SIEM_POSTLOGIN_ENABLED: "true"
+      SIEM_POSTLOGIN_MANIFEST_SHA256: ${FLARE_POSTLOGIN_MANIFEST_SHA256:?Pinned manifest required}
+      SIEM_POSTLOGIN_OPERATOR_HOLD_FILE: /run/ueba-postlogin/operator-hold.json
+      SIEM_UEBA_ENABLED: "false"
+      SIEM_UEBA_URL: http://ueba-worker:8091
+      SIEM_UEBA_SERVICE_TOKEN_FILE: /run/secrets/ueba.token
+      SIEM_SECURITY_EVENTS_ENABLED: "true"
+      SIEM_SECURITY_EVENTS_POST_LOGIN_ENABLED: "true"
+    volumes:
+      - type: bind
+        source: ${FLARE_POSTLOGIN_RUNTIME_DIR:?Runtime publication required}
+        target: /run/ueba-postlogin
+        read_only: true
+      - type: bind
+        source: ${FLARE_POSTLOGIN_SERVICE_TOKEN:?Existing service credential required}
+        target: /run/secrets/ueba.token
+        read_only: true
+  nginx:
+    image: ${FLARE_POSTLOGIN_NGINX_IMAGE:?Verified frontend release required}
+    cpus: 0.25
+    mem_limit: 128m
+  db:
+    cpus: 1
+    mem_limit: 1g
+  redis:
+    cpus: 0.25
+    mem_limit: 128m
+  postlogin-worker:
+    image: ${FLARE_POSTLOGIN_WORKER_IMAGE:?Verified worker release required}
+    cpus: 1
+    mem_limit: 512m
+    user: "10001:10001"
+    group_add: ["1000"]
+    read_only: true
+    tmpfs: ["/tmp:rw,nosuid,size=64m"]
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      UEBA_POSTLOGIN_SERVING_ONLY: "true"
+      UEBA_SERVICE_TOKEN_FILE: /run/secrets/ueba.token
+      UEBA_POSTLOGIN_MODEL_DIR: /run/model
+      UEBA_POSTLOGIN_MANIFEST_SHA256: ${FLARE_POSTLOGIN_MANIFEST_SHA256:?Pinned manifest required}
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - type: bind
+        source: ${FLARE_POSTLOGIN_RUNTIME_DIR}/model-v1
+        target: /run/model
+        read_only: true
+      - type: bind
+        source: ${FLARE_POSTLOGIN_SERVICE_TOKEN}
+        target: /run/secrets/ueba.token
+        read_only: true
+    networks:
+      flare-internal:
+        aliases: [ueba-worker]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json,urllib.request; v=json.load(urllib.request.urlopen('http://127.0.0.1:8091/health',timeout=2)); assert v.get('serving_only') and v['postlogin']['available']"]
+      interval: 15s
+      timeout: 4s
+      retries: 5
+      start_period: 15s

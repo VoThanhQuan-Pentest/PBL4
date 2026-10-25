@@ -5,6 +5,7 @@ ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 RUNTIME_DIR="${ROOT_DIR}/observability/runtime"
 RESULT_FILE="${RUNTIME_DIR}/verification.json"
 WEB_URL=${FLARE_LAB_TARGET:-"http://127.0.0.1:${LOCAL_LAB_WEB_PORT:-8088}"}
+RECOVERY_URL=${PREVENTION_RECOVERY_URL:-"http://127.0.0.1:${LOCAL_LAB_RECOVERY_PORT:-8089}"}
 KIBANA_URL=${KIBANA_URL:-"http://127.0.0.1:${LOCAL_LAB_KIBANA_PORT:-5601}"}
 export OBSERVABILITY_ROOT_DIR="$ROOT_DIR"
 export FILEBEAT_CERTS_DIR="${ROOT_DIR}/.secrets/observability/web"
@@ -56,6 +57,21 @@ get_trace() {
   jq -nc --arg trace "$1" '{size:1,query:{term:{"trace.id":$trace}}}' | elastic_api POST '/logs-nginx.access-lab/_search'
 }
 
+# Public entry uses the WAF gateway; the recovery listener exposes only auth/SIEM.
+gateway=$(curl --fail --silent --show-error --max-time 5 "${WEB_URL}/healthz" || true)
+printf '%s' "$gateway" | jq -e '.status=="UP" and (.policy_version|type=="number") and (.redis_state=="UP")' >/dev/null || fail prevention_gateway 'gateway policy or Redis is not ready'
+recovery=$(curl --fail --silent --show-error --max-time 5 "${RECOVERY_URL}/api/health" || true)
+printf '%s' "$recovery" | jq -e '.status=="UP"' >/dev/null || fail prevention_recovery 'loopback recovery listener is not available'
+recovery_commerce=$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 5 "${RECOVERY_URL}/api/orders")
+[ "$recovery_commerce" = 404 ] || fail prevention_recovery 'recovery listener exposed a non-SIEM commerce route'
+gateway_container=$(compose ps -q gateway)
+gateway_ports=$(docker inspect "$gateway_container" --format '{{json .HostConfig.PortBindings}}')
+printf '%s' "$gateway_ports" | jq -e '.["8082/tcp"][0].HostIp=="127.0.0.1" and .["8089/tcp"][0].HostIp=="127.0.0.1"' >/dev/null || fail prevention_ports 'gateway or recovery listener is not loopback-bound'
+nginx_container=$(compose ps -q nginx)
+nginx_ports=$(docker inspect "$nginx_container" --format '{{json .HostConfig.PortBindings}}')
+printf '%s' "$nginx_ports" | jq -e '(. // {}) | has("80/tcp")|not' >/dev/null || fail prevention_ports 'Nginx bypass is still published'
+pass prevention_gateway 'Coraza gateway, Redis and loopback recovery route are healthy; Nginx bypass is unpublished'
+
 # Template, mapping and data-stream lifecycle contract.
 mapping=$(elastic_api GET '/logs-nginx.access-lab/_mapping' </dev/null)
 printf '%s' "$mapping" | jq -e 'to_entries[0].value.mappings.properties.source.properties.geo.properties.location.type=="geo_point"' >/dev/null || fail mapping 'source.geo.location is not geo_point'
@@ -64,17 +80,27 @@ lifecycle_error=$(elastic_api GET '/_data_stream/logs-nginx.parse_error-lab/_lif
 [ "$(printf '%s' "$lifecycle_access" | jq -r '.data_streams[0].lifecycle.data_retention')" = 7d ] || fail lifecycle 'access retention is not 7d'
 [ "$(printf '%s' "$lifecycle_error" | jq -r '.data_streams[0].lifecycle.data_retention')" = 3d ] || fail lifecycle 'parse-error retention is not 3d'
 pass mapping_lifecycle 'geo_point mapping, access 7d, parse-error 3d'
+prevention_mapping=$(elastic_api GET '/logs-flare.prevention-lab/_mapping' </dev/null)
+printf '%s' "$prevention_mapping" | jq -e '
+  to_entries[0].value.mappings.properties.source.properties.ip.type=="ip" and
+  to_entries[0].value.mappings.properties.flare.properties.prevention.properties.rule_id.type=="keyword"
+' >/dev/null || fail prevention_mapping 'prevention event mapping is invalid'
+prevention_lifecycle=$(elastic_api GET '/_data_stream/logs-flare.prevention-lab/_lifecycle' </dev/null)
+[ "$(printf '%s' "$prevention_lifecycle" | jq -r '.data_streams[0].lifecycle.data_retention')" = 30d ] || fail prevention_mapping 'prevention retention is not 30d'
+pass prevention_mapping 'gateway decision stream has typed IP/rule mappings and 30d retention'
 
-# A real Nginx request must arrive quickly and ignore a spoofed forwarding IP.
+# A real gateway request must preserve its trace and ignore spoofed forwarding identity.
 headers=$(mktemp)
 trap 'rm -f "$headers"' EXIT
-curl --fail --silent --show-error -D "$headers" -o /dev/null -H 'X-Forwarded-For: 8.8.8.8' "${WEB_URL}/api/health?token=synthetic-secret-marker"
+curl --fail --silent --show-error -D "$headers" -o /dev/null \
+  -H 'X-Forwarded-For: 8.8.8.8' -H 'X-Request-ID: attacker-controlled' \
+  "${WEB_URL}/api/health?token=synthetic-secret-marker"
 trace=$(awk 'BEGIN{IGNORECASE=1} /^X-Request-ID:/ {gsub("\r", "", $2); print $2}' "$headers" | tail -n 1)
-[ -n "$trace" ] || fail pipeline_latency 'missing X-Request-ID response header'
+[[ "$trace" =~ ^[a-f0-9]{32}$ ]] && [ "$trace" != attacker-controlled ] || fail pipeline_latency 'gateway did not replace the client trace ID'
 wait_trace "$trace" 15 || fail pipeline_latency 'request did not arrive within 15 seconds'
 doc=$(get_trace "$trace")
-printf '%s' "$doc" | jq -e '.hits.hits[0]._source.source.ip != "8.8.8.8" and .hits.hits[0]._source.url.query=="[REDACTED]" and (tostring|contains("synthetic-secret-marker")|not) and (.hits.hits[0]._source|has("body")|not) and ((.hits.hits[0]._source.flare // {})|has("detection")|not)' >/dev/null || fail redaction_proxy 'spoofed XFF, query/body leakage or an empty detection object was detected'
-pass pipeline_latency_redaction 'arrival <=15s, XFF ignored, query redacted, body absent and blank detection removed'
+printf '%s' "$doc" | jq -e --arg trace "$trace" '.hits.hits[0]._source.trace.id==$trace and .hits.hits[0]._source.source.ip != "8.8.8.8" and .hits.hits[0]._source.url.query=="[REDACTED]" and (tostring|contains("synthetic-secret-marker")|not) and (.hits.hits[0]._source|has("body")|not) and ((.hits.hits[0]._source.flare // {})|has("detection")|not)' >/dev/null || fail redaction_proxy 'spoofed forwarding identity, query/body leakage or an empty detection object was detected'
+pass pipeline_latency_redaction 'arrival <=15s, XFF/trace spoofing ignored, query redacted, body absent and blank detection removed'
 
 # Removing Nginx's blank detection object must leave the scanner-UA enrichment
 # path available rather than suppressing it with an empty-but-existing field.

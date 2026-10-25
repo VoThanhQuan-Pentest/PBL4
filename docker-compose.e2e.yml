@@ -19,6 +19,7 @@ services:
 
   mailpit:
     image: axllent/mailpit:v1.24.1@sha256:4873e5a441ed368f1e98a832f61257a033859f5e829542cd03fb772d2282ea4e
+    restart: unless-stopped
     ports:
       - "127.0.0.1:${MAILPIT_HTTP_PORT:-8025}:8025"
     networks:

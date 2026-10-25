@@ -23,6 +23,44 @@ filebeat.inputs:
       data_stream.dataset: nginx.access
       data_stream.namespace: lab
 
+  - type: filestream
+    id: flare-security-events-json
+    enabled: true
+    paths:
+      - /var/log/flare/security-events.ndjson*
+    prospector.scanner.fingerprint.length: 64
+    parsers:
+      - ndjson:
+          target: ""
+          overwrite_keys: true
+          expand_keys: true
+          add_error_key: true
+    fields_under_root: true
+    fields:
+      event.dataset: flare.security
+      data_stream.type: logs
+      data_stream.dataset: flare.security
+      data_stream.namespace: lab
+
+  - type: filestream
+    id: flare-prevention-events-json
+    enabled: true
+    paths:
+      - /var/log/flare/prevention-events.ndjson*
+    prospector.scanner.fingerprint.length: 64
+    parsers:
+      - ndjson:
+          target: ""
+          overwrite_keys: true
+          expand_keys: true
+          add_error_key: true
+    fields_under_root: true
+    fields:
+      event.dataset: flare.prevention
+      data_stream.type: logs
+      data_stream.dataset: flare.prevention
+      data_stream.namespace: lab
+
 # A disk queue (not a memory-only buffer) survives a Filebeat restart and gives
 # the Web host 1 GB of back-pressure room while Logstash is unavailable.
 queue.disk:

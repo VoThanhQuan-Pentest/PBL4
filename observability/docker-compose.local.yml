@@ -4,6 +4,94 @@ services:
   app:
     environment:
       APP_CORS_ALLOWED_ORIGINS: "http://127.0.0.1:${LOCAL_LAB_WEB_PORT:-8088}"
+      SIEM_ENABLED: "true"
+      SIEM_ELASTICSEARCH_URL: "https://elasticsearch:9200"
+      SIEM_ELASTICSEARCH_USERNAME: "flare_siem_reader"
+      SIEM_ELASTICSEARCH_PASSWORD_FILE: "/run/flare-secrets/siem-reader.password"
+      SIEM_ELASTICSEARCH_CA_FILE: "/run/flare-secrets/ca.crt"
+      SIEM_POLL_INTERVAL_SECONDS: "30"
+      SIEM_SECURITY_EVENTS_ENABLED: "true"
+      SIEM_UEBA_ENABLED: "true"
+      SIEM_UEBA_URL: "http://ueba-worker:8091"
+      SIEM_UEBA_SERVICE_TOKEN_FILE: "/run/flare-secrets/ueba.token"
+      SIEM_UEBA_EXPERIMENT_CATALOG_DIR: "/run/ueba-catalog"
+      SIEM_PREVENTION_ENABLED: "true"
+      SIEM_PREVENTION_DEMO_ENABLED: "true"
+      SIEM_PREVENTION_SERVICE_TOKEN_FILE: "/run/flare-secrets/prevention.token"
+      SIEM_PREVENTION_IPINFO_TOKEN_FILE: "/run/flare-secrets/ipinfo.token"
+      SIEM_PREVENTION_ABUSEIPDB_KEY_FILE: "/run/flare-secrets/abuseipdb.key"
+    group_add:
+      - "10001"
+      - "${UEBA_OPERATOR_GID:-1000}"
+    volumes:
+      - type: bind
+        source: ${OBSERVABILITY_ROOT_DIR:-..}/observability/runtime/ueba-catalog
+        target: /run/ueba-catalog
+        read_only: true
+        bind:
+          create_host_path: false
+      - ${OBSERVABILITY_ROOT_DIR:-..}/.secrets/observability/monitor/siem-reader.password:/run/flare-secrets/siem-reader.password:ro
+      - ${OBSERVABILITY_ROOT_DIR:-..}/.secrets/observability/monitor/ca.crt:/run/flare-secrets/ca.crt:ro
+      - ${OBSERVABILITY_ROOT_DIR:-..}/.secrets/ueba/worker.token:/run/flare-secrets/ueba.token:ro
+      - ${OBSERVABILITY_ROOT_DIR:-..}/.secrets/prevention/gateway.token:/run/flare-secrets/prevention.token:ro
+      - ${OBSERVABILITY_ROOT_DIR:-..}/.secrets/prevention/ipinfo.token:/run/flare-secrets/ipinfo.token:ro
+      - ${OBSERVABILITY_ROOT_DIR:-..}/.secrets/prevention/abuseipdb.key:/run/flare-secrets/abuseipdb.key:ro
+    networks:
+      - flare-internal
+      - observability-internal
+      - ueba-internal
+
+  ueba-model-data-init:
+    build:
+      context: ${OBSERVABILITY_ROOT_DIR:-..}/ueba-worker
+    user: "0:0"
+    entrypoint: ["sh", "-c"]
+    command: ["chown 10001:10001 /var/lib/ueba"]
+    volumes:
+      - ueba-model-data:/var/lib/ueba
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    cap_add: [CHOWN]
+    network_mode: none
+    restart: "no"
+
+  ueba-worker:
+    build:
+      context: ${OBSERVABILITY_ROOT_DIR:-..}/ueba-worker
+    user: "10001:10001"
+    mem_limit: 1g
+    cpus: "1.5"
+    pids_limit: 128
+    group_add: ["${UEBA_OPERATOR_GID:-1000}"]
+    environment:
+      UEBA_MODEL_DIR: /var/lib/ueba
+      UEBA_SERVICE_TOKEN_FILE: /run/secrets/ueba.token
+      UEBA_EXPERIMENT_CATALOG_DIR: /run/ueba-catalog
+      UEBA_RISK_WORKSPACE: /run/ueba-risk
+    volumes:
+      - ueba-model-data:/var/lib/ueba
+      - ${OBSERVABILITY_ROOT_DIR:-..}/.secrets/ueba/worker.token:/run/secrets/ueba.token:ro
+      - ${OBSERVABILITY_ROOT_DIR:-..}/observability/runtime/ueba-catalog:/run/ueba-catalog:ro
+      - ${OBSERVABILITY_ROOT_DIR:-..}/observability/runtime/ueba-risk:/run/ueba-risk:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8091/health', timeout=2).read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    depends_on:
+      ueba-model-data-init:
+        condition: service_completed_successfully
+    networks: [ueba-internal]
+    restart: unless-stopped
 
   db:
     ports: !reset []
@@ -12,10 +100,15 @@ services:
     ports: !reset []
 
   elasticsearch:
+    environment:
+      ES_JAVA_OPTS: "-Xms2g -Xmx2g"
     volumes:
       - elasticsearch-data:/usr/share/elasticsearch/data
 
   logstash:
+    environment:
+      LS_JAVA_OPTS: "-Xms512m -Xmx512m"
+    mem_limit: 2g
     ports: !reset []
     networks:
       - observability-internal
@@ -26,8 +119,51 @@ services:
       - "127.0.0.1:${LOCAL_LAB_KIBANA_PORT:-5601}:5601"
 
   nginx:
-    ports: !override
-      - "127.0.0.1:${LOCAL_LAB_WEB_PORT:-8088}:80"
+    ports: !reset []
+    environment:
+      NGINX_TRUSTED_PROXY_CIDR: "${FLARE_GATEWAY_PRIVATE_IP:-172.31.0.50}/32"
+
+  gateway:
+    build:
+      context: ${OBSERVABILITY_ROOT_DIR:-..}/gateway
+    user: "10001:10001"
+    group_add: ["${UEBA_OPERATOR_GID:-1000}"]
+    environment:
+      PREVENTION_UPSTREAM: http://nginx:80
+      PREVENTION_POLICY_URL: http://app:8080/internal/v1/prevention/policy
+      PREVENTION_TOKEN_FILE: /run/flare-secrets/prevention.token
+      PREVENTION_EVENT_FILE: /var/log/flare/prevention-events.ndjson
+      PREVENTION_REDIS_ADDR: redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+    volumes:
+      - ${OBSERVABILITY_ROOT_DIR:-..}/.secrets/prevention/gateway.token:/run/flare-secrets/prevention.token:ro
+      - security-event-logs:/var/log/flare
+    ports:
+      - "127.0.0.1:${LOCAL_LAB_WEB_PORT:-8088}:8082"
+      - "127.0.0.1:${LOCAL_LAB_RECOVERY_PORT:-8089}:8089"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m,mode=0700,uid=10001,gid=10001
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    mem_limit: 768m
+    cpus: "1.5"
+    healthcheck:
+      test: ["CMD", "/prevention-gateway", "healthcheck"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+    depends_on:
+      app:
+        condition: service_healthy
+      nginx:
+        condition: service_started
+    networks:
+      flare-internal:
+        ipv4_address: ${FLARE_GATEWAY_PRIVATE_IP:-172.31.0.50}
+    restart: unless-stopped
 
   filebeat:
     environment:
@@ -38,8 +174,12 @@ services:
 
 volumes:
   elasticsearch-data:
+  ueba-model-data:
 
 networks:
   observability-beats:
+    driver: bridge
+    internal: true
+  ueba-internal:
     driver: bridge
     internal: true

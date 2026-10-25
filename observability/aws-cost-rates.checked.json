@@ -1,0 +1,17 @@
+{
+  "region": "ap-southeast-1",
+  "instance_type": "m7i-flex.large",
+  "checked_at": "2026-10-12T06:48:18Z",
+  "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonEC2/current/ap-southeast-1/index.json",
+  "additional_sources": [
+    "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonVPC/current/ap-southeast-1/index.json",
+    "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSDataTransfer/current/ap-southeast-1/index.json"
+  ],
+  "instance_hour": "0.1197",
+  "gp3_gb_month": "0.096",
+  "snapshot_gb_month": "0.05",
+  "ipv4_hour": "0.005",
+  "egress_gb": "0.12",
+  "tax_multiplier": "1.20",
+  "assumptions": "20 percent planning allowance for tax/surcharges, not a verified tax rate. No free-tier credit applied. Standard gp3 included IOPS/throughput. 30 running hours per EC2, 10 retained days, up to 140 GB snapshot storage across the three existing volumes (actual storage may be lower because empty blocks are excluded), and 5 GB egress charged conservatively."
+}

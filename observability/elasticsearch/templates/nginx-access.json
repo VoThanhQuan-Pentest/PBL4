@@ -14,6 +14,8 @@
       "dynamic": true,
       "properties": {
         "@timestamp": { "type": "date" },
+        "server": { "properties": { "ip": {"type":"ip"}, "port": {"type":"integer"} } },
+        "observer": { "properties": { "type": {"type":"keyword"} } },
         "trace": { "properties": { "id": { "type": "keyword" } } },
         "source": {
           "properties": {

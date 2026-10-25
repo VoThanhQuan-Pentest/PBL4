@@ -22,7 +22,7 @@ locals {
   public_subnet_cidr = "10.20.10.0/24"
   web_private_ip     = "10.20.10.10"
   monitor_private_ip = "10.20.10.20"
-  availability_zone  = data.aws_availability_zones.available.names[0]
+  availability_zone  = coalesce(var.availability_zone, data.aws_availability_zones.available.names[0])
   common_tags = {
     Project   = var.project_name
     ManagedBy = "terraform"
@@ -95,7 +95,7 @@ resource "aws_security_group" "web" {
 
 resource "aws_security_group" "monitor" {
   name_prefix = "${var.project_name}-monitor-"
-  description = "Monitor EC2: administrator SSH and Logstash only from Web SG"
+  description = "Monitor EC2: SSH and private ELK services restricted to Web SG"
   vpc_id      = aws_vpc.lab.id
 
   ingress {
@@ -110,6 +110,14 @@ resource "aws_security_group" "monitor" {
     description     = "Mutual-TLS Filebeat only from Web security group"
     from_port       = 5044
     to_port         = 5044
+    protocol        = "tcp"
+    security_groups = [aws_security_group.web.id]
+  }
+
+  ingress {
+    description     = "HTTPS Elasticsearch reader only from Web security group"
+    from_port       = 9200
+    to_port         = 9200
     protocol        = "tcp"
     security_groups = [aws_security_group.web.id]
   }
@@ -181,6 +189,15 @@ resource "aws_vpc_security_group_egress_rule" "web_filebeat" {
   ip_protocol       = "tcp"
 }
 
+resource "aws_vpc_security_group_egress_rule" "web_elasticsearch" {
+  security_group_id = aws_security_group.web.id
+  description       = "HTTPS SIEM queries to Monitor private IP"
+  cidr_ipv4         = "${local.monitor_private_ip}/32"
+  from_port         = 9200
+  to_port           = 9200
+  ip_protocol       = "tcp"
+}
+
 resource "aws_vpc_security_group_egress_rule" "web_dns_udp" {
   security_group_id = aws_security_group.web.id
   description       = "DNS to the VPC resolver"
@@ -219,7 +236,7 @@ resource "aws_vpc_security_group_egress_rule" "monitor_dns_tcp" {
 
 resource "aws_iam_role" "ec2" {
   name_prefix = "${var.project_name}-ec2-"
-  description = "Minimal EC2 recovery role for Flare AWS–ELK lab"
+  description = "Minimal EC2 recovery role for Flare AWS-ELK lab"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -248,19 +265,30 @@ resource "aws_key_pair" "lab" {
 }
 
 resource "aws_instance" "web" {
-  ami                         = data.aws_ami.ubuntu_2404.id
-  instance_type               = var.web_instance_type
-  subnet_id                   = aws_subnet.public.id
-  private_ip                  = local.web_private_ip
-  vpc_security_group_ids      = [aws_security_group.web.id]
-  associate_public_ip_address = false
+  ami                    = coalesce(var.ubuntu_ami_id, data.aws_ami.ubuntu_2404.id)
+  instance_type          = var.web_instance_type
+  subnet_id              = aws_subnet.public.id
+  private_ip             = local.web_private_ip
+  vpc_security_group_ids = [aws_security_group.web.id]
+  # The lab has no NAT gateway. A launch-time public address is required so
+  # cloud-init can install packages before Terraform finishes associating the
+  # stable EIP with this instance.
+  associate_public_ip_address = true
   key_name                    = aws_key_pair.lab.key_name
   iam_instance_profile        = aws_iam_instance_profile.ec2.name
-  user_data_replace_on_change = true
+  # Cloud-init is first-boot bootstrap. SG CIDR changes are applied in place,
+  # then the guarded SSM script synchronizes the already-booted UFW policy.
+  # Ignore user_data drift so IP rotation cannot stop/start the DB-bearing VM;
+  # startup-bootstrap changes require an explicit, reviewed instance replacement.
+  user_data_replace_on_change = false
   user_data = templatefile("${path.module}/templates/web-cloud-init.yaml.tftpl", {
     admin_cidrs  = var.admin_cidrs
     tester_cidrs = var.tester_cidrs
   })
+
+  lifecycle {
+    ignore_changes = [user_data]
+  }
 
   root_block_device {
     encrypted   = true
@@ -279,20 +307,30 @@ resource "aws_instance" "web" {
 }
 
 resource "aws_instance" "monitor" {
-  ami                         = data.aws_ami.ubuntu_2404.id
-  instance_type               = var.monitor_instance_type
-  subnet_id                   = aws_subnet.public.id
-  private_ip                  = local.monitor_private_ip
-  vpc_security_group_ids      = [aws_security_group.monitor.id]
-  associate_public_ip_address = false
+  ami                    = coalesce(var.ubuntu_ami_id, data.aws_ami.ubuntu_2404.id)
+  instance_type          = var.monitor_instance_type
+  subnet_id              = aws_subnet.public.id
+  private_ip             = local.monitor_private_ip
+  vpc_security_group_ids = [aws_security_group.monitor.id]
+  # See the Web instance note: Monitor cloud-init also needs Internet before
+  # its stable EIP association exists.
+  associate_public_ip_address = true
   key_name                    = aws_key_pair.lab.key_name
   iam_instance_profile        = aws_iam_instance_profile.ec2.name
-  user_data_replace_on_change = true
+  # Cloud-init is first-boot bootstrap. SG CIDR changes are applied in place,
+  # then the guarded SSM script synchronizes the already-booted UFW policy.
+  # Ignore user_data drift so IP rotation cannot stop/start Elasticsearch;
+  # startup-bootstrap changes require an explicit, reviewed instance replacement.
+  user_data_replace_on_change = false
   user_data = templatefile("${path.module}/templates/monitor-cloud-init.yaml.tftpl", {
     admin_cidrs            = var.admin_cidrs
     web_private_ip         = local.web_private_ip
     monitor_data_volume_id = aws_ebs_volume.monitor_data.id
   })
+
+  lifecycle {
+    ignore_changes = [user_data]
+  }
 
   root_block_device {
     encrypted   = true
@@ -343,9 +381,33 @@ resource "aws_budgets_budget" "monthly" {
   limit_unit   = "USD"
   time_unit    = "MONTHLY"
 
+  # This is the lab-specific $40 guardrail, not an account-wide forecast.
+  # The Project cost-allocation tag must be activated in Billing before its
+  # values appear in Cost Explorer and budget calculations.
+  cost_filter {
+    name   = "TagKeyValue"
+    values = [format("user:Project$%s", var.project_name)]
+  }
+
   notification {
     comparison_operator        = "GREATER_THAN"
-    threshold                  = 80
+    threshold                  = 50
+    threshold_type             = "PERCENTAGE"
+    notification_type          = "ACTUAL"
+    subscriber_email_addresses = [var.budget_email]
+  }
+
+  notification {
+    comparison_operator        = "GREATER_THAN"
+    threshold                  = 75
+    threshold_type             = "PERCENTAGE"
+    notification_type          = "ACTUAL"
+    subscriber_email_addresses = [var.budget_email]
+  }
+
+  notification {
+    comparison_operator        = "GREATER_THAN"
+    threshold                  = 90
     threshold_type             = "PERCENTAGE"
     notification_type          = "ACTUAL"
     subscriber_email_addresses = [var.budget_email]

@@ -71,5 +71,6 @@ runcmd:
   - ufw allow from ${cidr} to any port 22 proto tcp
 %{ endfor ~}
   - ufw allow from ${web_private_ip} to any port 5044 proto tcp
+  - ufw allow from ${web_private_ip} to any port 9200 proto tcp
   - ufw --force enable
   - systemctl restart docker

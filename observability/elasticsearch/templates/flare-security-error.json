@@ -1,0 +1,18 @@
+{
+  "index_patterns": ["logs-flare.security_error-lab"],
+  "priority": 510,
+  "data_stream": {},
+  "template": {
+    "settings": {"index.number_of_shards": 1, "index.number_of_replicas": 0},
+    "lifecycle": {"data_retention": "3d"},
+    "mappings": {
+      "dynamic": false,
+      "properties": {
+        "@timestamp": {"type": "date"},
+        "event": {"properties": {"id": {"type": "keyword"}, "dataset": {"type": "keyword"}}},
+        "flare": {"properties": {"parse_error_reason": {"type": "keyword", "ignore_above": 1024}}}
+      }
+    }
+  },
+  "_meta": {"description": "Quarantine for invalid customer security events"}
+}

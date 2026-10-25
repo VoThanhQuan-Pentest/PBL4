@@ -10,7 +10,7 @@ MONITOR_DIR="${SECRETS_DIR}/monitor"
 for binary in docker jq; do
   command -v "$binary" >/dev/null 2>&1 || { printf 'Missing required command: %s\n' "$binary" >&2; exit 1; }
 done
-for path in elasticsearch.password kibana-system.password logstash-internal.password analyst.password; do
+for path in elasticsearch.password kibana-system.password logstash-internal.password analyst.password siem-reader.password; do
   [ -r "${MONITOR_DIR}/${path}" ] || { printf 'Run observability/scripts/bootstrap-secrets.sh first.\n' >&2; exit 1; }
 done
 
@@ -64,22 +64,46 @@ ensure_data_stream() {
 wait_for_elasticsearch
 put_file '/_index_template/flare-nginx-access' "${ROOT_DIR}/observability/elasticsearch/templates/nginx-access.json"
 put_file '/_index_template/flare-nginx-parse-error' "${ROOT_DIR}/observability/elasticsearch/templates/nginx-parse-error.json"
+put_file '/_index_template/flare-security-events' "${ROOT_DIR}/observability/elasticsearch/templates/flare-security.json"
+put_file '/_index_template/flare-security-errors' "${ROOT_DIR}/observability/elasticsearch/templates/flare-security-error.json"
+put_file '/_index_template/flare-prevention-events' "${ROOT_DIR}/observability/elasticsearch/templates/flare-prevention.json"
+put_file '/_index_template/flare-prevention-errors' "${ROOT_DIR}/observability/elasticsearch/templates/flare-prevention-error.json"
 
-jq -nc '{cluster:["monitor"],indices:[{names:["logs-nginx.access-lab","logs-nginx.parse_error-lab"],privileges:["auto_configure","create_doc"]}],applications:[],run_as:[],metadata:{description:"Logstash health monitoring plus write-only access to Flare lab streams"}}' |
+jq -nc '{cluster:["monitor"],indices:[{names:["logs-nginx.access-lab","logs-nginx.parse_error-lab","logs-flare.security-lab","logs-flare.security_error-lab","logs-flare.prevention-lab","logs-flare.prevention_error-lab"],privileges:["auto_configure","create_doc"]}],applications:[],run_as:[],metadata:{description:"Logstash health monitoring plus write-only access to Flare lab streams"}}' |
   elastic_api PUT '/_security/role/flare_ingest' >/dev/null
-jq -nc '{cluster:[],indices:[{names:["logs-nginx.access-lab","logs-nginx.parse_error-lab",".alerts-security.alerts-flare-lab",".internal.alerts-security.alerts-flare-lab-*"],privileges:["read","view_index_metadata"]}],applications:[{application:"kibana-.kibana",privileges:["feature_discover.read","feature_dashboard.read","feature_maps.read","feature_securitySolution.read"],resources:["space:flare-lab"]}],run_as:[],metadata:{description:"Read-only Flare Lab analyst for Discover, dashboards, maps and security alerts"}}' |
+jq -nc '{cluster:[],indices:[{names:["logs-nginx.access-lab","logs-nginx.parse_error-lab","logs-flare.security-lab","logs-flare.security_error-lab","logs-flare.prevention-lab","logs-flare.prevention_error-lab",".alerts-security.alerts-flare-lab",".internal.alerts-security.alerts-flare-lab-*"],privileges:["read","view_index_metadata"]}],applications:[{application:"kibana-.kibana",privileges:["feature_discover.read","feature_dashboard.read","feature_maps.read","feature_securitySolution.read"],resources:["space:flare-lab"]}],run_as:[],metadata:{description:"Read-only Flare Lab analyst for Discover, dashboards, maps and security alerts"}}' |
   elastic_api PUT '/_security/role/flare_analyst' >/dev/null
+jq -nc '{cluster:[],indices:[{names:["logs-nginx.access-lab","logs-flare.security-lab","logs-flare.prevention-lab",".alerts-security.alerts-flare-lab",".internal.alerts-security.alerts-flare-lab-*"],privileges:["read","view_index_metadata"]}],applications:[],run_as:[],metadata:{description:"Read-only backend service account for Flare SIEM APIs"}}' |
+  elastic_api PUT '/_security/role/flare_siem_reader' >/dev/null
 
 jq -Rrs 'rtrimstr("\n") | {password:.,roles:["flare_ingest"],full_name:"Flare Logstash ingest"}' <"${MONITOR_DIR}/logstash-internal.password" |
   elastic_api PUT '/_security/user/logstash_internal' >/dev/null
 jq -Rrs 'rtrimstr("\n") | {password:.,roles:["flare_analyst"],full_name:"Flare Lab analyst"}' <"${MONITOR_DIR}/analyst.password" |
   elastic_api PUT '/_security/user/flare_analyst' >/dev/null
+jq -Rrs 'rtrimstr("\n") | {password:.,roles:["flare_siem_reader"],full_name:"Flare SIEM backend reader"}' <"${MONITOR_DIR}/siem-reader.password" |
+  elastic_api PUT '/_security/user/flare_siem_reader' >/dev/null
 jq -Rrs 'rtrimstr("\n") | {password:.}' <"${MONITOR_DIR}/kibana-system.password" |
   elastic_api POST '/_security/user/kibana_system/_password' >/dev/null
 
 ensure_data_stream logs-nginx.access-lab
 ensure_data_stream logs-nginx.parse_error-lab
+ensure_data_stream logs-flare.security-lab
+ensure_data_stream logs-flare.security_error-lab
+ensure_data_stream logs-flare.prevention-lab
+ensure_data_stream logs-flare.prevention_error-lab
+# A data-stream template only affects future backing indices. Rollover once
+# when the new count field is absent so dynamic:false does not discard it.
+prevention_mapping=$(elastic_api GET '/logs-flare.prevention-lab/_mapping' </dev/null)
+if ! printf '%s' "$prevention_mapping" | jq -e '
+  to_entries[0].value.mappings.properties.flare.properties.prevention.properties.count.type=="integer"
+' >/dev/null 2>&1; then
+  printf '%s' '{}' | elastic_api POST '/logs-flare.prevention-lab/_rollover' >/dev/null
+fi
 printf '%s' '{"data_retention":"7d"}' | elastic_api PUT '/_data_stream/logs-nginx.access-lab/_lifecycle' >/dev/null
 printf '%s' '{"data_retention":"3d"}' | elastic_api PUT '/_data_stream/logs-nginx.parse_error-lab/_lifecycle' >/dev/null
+printf '%s' '{"data_retention":"30d"}' | elastic_api PUT '/_data_stream/logs-flare.security-lab/_lifecycle' >/dev/null
+printf '%s' '{"data_retention":"3d"}' | elastic_api PUT '/_data_stream/logs-flare.security_error-lab/_lifecycle' >/dev/null
+printf '%s' '{"data_retention":"30d"}' | elastic_api PUT '/_data_stream/logs-flare.prevention-lab/_lifecycle' >/dev/null
+printf '%s' '{"data_retention":"3d"}' | elastic_api PUT '/_data_stream/logs-flare.prevention_error-lab/_lifecycle' >/dev/null
 
 printf 'Elasticsearch templates, retention and least-privilege users are ready.\n'

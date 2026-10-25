@@ -1,0 +1,23 @@
+{
+  "index_patterns": ["logs-flare.prevention_error-lab"],
+  "priority": 520,
+  "data_stream": {},
+  "template": {
+    "settings": {"index.number_of_shards": 1, "index.number_of_replicas": 0},
+    "lifecycle": {"data_retention": "3d"},
+    "mappings": {
+      "dynamic": false,
+      "properties": {
+        "@timestamp": {"type": "date"},
+        "event": {"properties": {
+          "dataset": {"type": "keyword"},
+          "ingested": {"type": "date"}
+        }},
+        "flare": {"properties": {
+          "parse_error_reason": {"type": "keyword", "ignore_above": 256}
+        }}
+      }
+    }
+  },
+  "_meta": {"description": "Minimal quarantine for invalid gateway events"}
+}

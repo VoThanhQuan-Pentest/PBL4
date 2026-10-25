@@ -1,0 +1,109 @@
+# Merge after docker-compose.yml, docker-compose.otp-local.yml,
+# docker-compose.postlogin-project.yml and observability/docker-compose.monitor.yml.
+# Reuses the OTP application/database. The old ES/Logstash writers must be stopped
+# after clone verification and before this project opens their external volumes.
+services:
+  app:
+    image: ${FLARE_SIEM_APP_IMAGE:?Separate verified SIEM release required}
+    group_add: !override ["1000", "10001"]
+    environment:
+      APP_SENSITIVE_ACTION_CONFIRMATION_ENABLED: "true"
+      APP_SENSITIVE_ACTION_CONFIRMATION_ACCOUNT_ALLOWLIST: ${APP_SENSITIVE_ACTION_CONFIRMATION_ACCOUNT_ALLOWLIST:?Existing OTP account allowlist required}
+      SPRING_FLYWAY_IGNORE_MIGRATION_PATTERNS: "repeatable:missing"
+      SIEM_ENABLED: "true"
+      SIEM_ELASTICSEARCH_URL: https://elasticsearch:9200
+      SIEM_ELASTICSEARCH_USERNAME: flare_siem_reader
+      SIEM_ELASTICSEARCH_PASSWORD_FILE: /run/flare-secrets/siem-reader.password
+      SIEM_ELASTICSEARCH_CA_FILE: /run/flare-secrets/ca.crt
+      SIEM_UEBA_ENABLED: "false"
+      SIEM_PREVENTION_ENABLED: "true"
+      SIEM_PREVENTION_DEMO_ENABLED: "false"
+      SIEM_PREVENTION_RECURRENCE_MODE: ${FLARE_SIEM_RECURRENCE_MODE:-OBSERVE}
+      SIEM_PREVENTION_PROTECTED_IPS: ${FLARE_SIEM_PROTECTED_IPS:?Declare protected management IPs}
+      SIEM_PREVENTION_SERVICE_TOKEN_FILE: /run/flare-secrets/prevention.token
+      SIEM_PREVENTION_IPINFO_TOKEN_FILE: /run/flare-secrets/ipinfo.token
+      SIEM_PREVENTION_ABUSEIPDB_KEY_FILE: /run/flare-secrets/abuseipdb.key
+    volumes:
+      - ${OBSERVABILITY_ROOT_DIR:-.}/.secrets/observability/monitor/siem-reader.password:/run/flare-secrets/siem-reader.password:ro
+      - ${OBSERVABILITY_ROOT_DIR:-.}/.secrets/observability/monitor/ca.crt:/run/flare-secrets/ca.crt:ro
+      - ${OBSERVABILITY_ROOT_DIR:-.}/.secrets/prevention/gateway.token:/run/flare-secrets/prevention.token:ro
+      - ${OBSERVABILITY_ROOT_DIR:-.}/.secrets/prevention/ipinfo.token:/run/flare-secrets/ipinfo.token:ro
+      - ${OBSERVABILITY_ROOT_DIR:-.}/.secrets/prevention/abuseipdb.key:/run/flare-secrets/abuseipdb.key:ro
+    networks:
+      - flare-internal
+      - observability-internal
+  nginx:
+    image: ${FLARE_SIEM_NGINX_IMAGE:?Separate verified SIEM Nginx release required}
+    ports: !reset []
+    environment:
+      NGINX_TRUSTED_PROXY_CIDR: 172.31.90.50/32
+  elasticsearch:
+    environment:
+      ES_JAVA_OPTS: -Xms2g -Xmx2g
+    volumes:
+      - type: volume
+        source: elasticsearch-data
+        target: /usr/share/elasticsearch/data
+  logstash:
+    environment:
+      LS_JAVA_OPTS: -Xms512m -Xmx512m
+    mem_limit: 1500m
+    ports: !reset []
+    networks: [observability-internal, observability-beats]
+  filebeat:
+    environment:
+      LOGSTASH_HOSTS: logstash:5044
+    mem_limit: 256m
+    networks: [flare-internal, observability-beats]
+  gateway:
+    image: ${FLARE_SIEM_GATEWAY_IMAGE:?Separate verified SIEM gateway release required}
+    user: "10001:10001"
+    group_add: ["1000"]
+    environment:
+      PREVENTION_UPSTREAM: http://nginx:80
+      PREVENTION_POLICY_URL: http://app:8080/internal/v1/prevention/policy
+      PREVENTION_TOKEN_FILE: /run/flare-secrets/prevention.token
+      PREVENTION_EVENT_FILE: /var/log/flare/prevention-events.ndjson
+      PREVENTION_POLICY_CACHE: /var/log/flare/gateway-policy.json
+      PREVENTION_REDIS_ADDR: redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Existing OTP Redis credential required}
+    volumes:
+      - ${OBSERVABILITY_ROOT_DIR:-.}/.secrets/prevention/gateway.token:/run/flare-secrets/prevention.token:ro
+      - security-event-logs:/var/log/flare
+    ports:
+      - 127.0.0.1:8088:8082
+      - 127.0.0.1:8089:8089
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=32m,mode=0700,uid=10001,gid=10001"]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    mem_limit: 384m
+    cpus: 1
+    healthcheck:
+      test: [CMD, /prevention-gateway, healthcheck]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+    depends_on:
+      app: {condition: service_healthy}
+      nginx: {condition: service_started}
+    networks:
+      flare-internal:
+        ipv4_address: 172.31.90.50
+    restart: unless-stopped
+volumes:
+  elasticsearch-data:
+    external: true
+    name: flare-local-elk_elasticsearch-data
+  logstash-data:
+    external: true
+    name: flare-local-elk_logstash-data
+networks:
+  flare-internal:
+    ipam:
+      config:
+        - subnet: 172.31.90.0/24
+  observability-beats:
+    driver: bridge
+    internal: true

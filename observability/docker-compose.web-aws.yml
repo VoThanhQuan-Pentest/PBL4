@@ -2,11 +2,142 @@
 # development; this override makes Nginx logs host-visible for rename/create
 # logrotate and keeps Filebeat's registry/certificates outside named volumes.
 services:
+  db:
+    ports: !reset []
+
+  app:
+    environment:
+      FLARE_ENVIRONMENT: aws-lab
+      SIEM_ENABLED: "true"
+      SIEM_SECURITY_EVENTS_ENABLED: "true"
+      SIEM_ELASTICSEARCH_URL: https://10.20.10.20:9200
+      SIEM_ELASTICSEARCH_USERNAME: flare_siem_reader
+      SIEM_ELASTICSEARCH_PASSWORD_FILE: /run/flare-secrets/siem-reader.password
+      SIEM_ELASTICSEARCH_CA_FILE: /run/flare-secrets/siem-ca.crt
+      SIEM_UEBA_ENABLED: "true"
+      SIEM_UEBA_URL: http://ueba-worker:8091
+      SIEM_UEBA_SERVICE_TOKEN_FILE: /run/flare-secrets/ueba.token
+      SIEM_UEBA_EXPERIMENT_CATALOG_DIR: /run/ueba-catalog
+      SIEM_PREVENTION_ENABLED: "true"
+      SIEM_PREVENTION_DEMO_ENABLED: "false"
+      SIEM_PREVENTION_SERVICE_TOKEN_FILE: /run/flare-secrets/prevention.token
+      SIEM_PREVENTION_IPINFO_TOKEN_FILE: /run/flare-secrets/ipinfo.token
+      SIEM_PREVENTION_ABUSEIPDB_KEY_FILE: /run/flare-secrets/abuseipdb.key
+    group_add:
+      - "1000"
+      - "10001"
+    volumes:
+      - type: bind
+        source: /opt/flare/observability/runtime/ueba-catalog
+        target: /run/ueba-catalog
+        read_only: true
+        bind:
+          create_host_path: false
+      - /opt/flare/.secrets/observability/web/ca.crt:/run/flare-secrets/siem-ca.crt:ro
+      - /opt/flare/.secrets/observability/web/siem-reader.password:/run/flare-secrets/siem-reader.password:ro
+      - /opt/flare/.secrets/ueba/worker.token:/run/flare-secrets/ueba.token:ro
+      - /opt/flare/.secrets/prevention/gateway.token:/run/flare-secrets/prevention.token:ro
+      - /opt/flare/.secrets/prevention/ipinfo.token:/run/flare-secrets/ipinfo.token:ro
+      - /opt/flare/.secrets/prevention/abuseipdb.key:/run/flare-secrets/abuseipdb.key:ro
+    networks: [flare-internal, ueba-internal]
+
+  ueba-model-data-init:
+    build:
+      context: ./ueba-worker
+    user: "0:0"
+    entrypoint: ["sh", "-c"]
+    command: ["chown 10001:10001 /var/lib/ueba"]
+    volumes: ["ueba-model-data:/var/lib/ueba"]
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN]
+    security_opt: ["no-new-privileges:true"]
+    network_mode: none
+    restart: "no"
+
+  ueba-worker:
+    build:
+      context: ./ueba-worker
+    user: "10001:10001"
+    group_add: ["1000"]
+    environment:
+      UEBA_MODEL_DIR: /var/lib/ueba
+      UEBA_SERVICE_TOKEN_FILE: /run/secrets/ueba.token
+      UEBA_EXPERIMENT_CATALOG_DIR: /run/ueba-catalog
+      UEBA_RISK_WORKSPACE: /run/ueba-risk
+    volumes:
+      - ueba-model-data:/var/lib/ueba
+      - /opt/flare/.secrets/ueba/worker.token:/run/secrets/ueba.token:ro
+      - /opt/flare/observability/runtime/ueba-catalog:/run/ueba-catalog:ro
+      - /opt/flare/observability/runtime/ueba-risk:/run/ueba-risk:ro
+    mem_limit: 1g
+    cpus: "1.5"
+    pids_limit: 128
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    depends_on:
+      ueba-model-data-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8091/health', timeout=2).read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    networks: [ueba-internal]
+    restart: unless-stopped
+
+  gateway:
+    restart: unless-stopped
+    build:
+      context: ./gateway
+    user: "10001:10001"
+    group_add: ["1000"]
+    environment:
+      PREVENTION_UPSTREAM: http://nginx:80
+      PREVENTION_POLICY_URL: http://app:8080/internal/v1/prevention/policy
+      PREVENTION_TOKEN_FILE: /run/flare-secrets/prevention.token
+      PREVENTION_EVENT_FILE: /var/log/flare/prevention-events.ndjson
+      PREVENTION_REDIS_ADDR: redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+    volumes:
+      - /opt/flare/.secrets/prevention/gateway.token:/run/flare-secrets/prevention.token:ro
+      - security-event-logs:/var/log/flare
+    ports:
+      - "${HTTP_HOST_PORT:-80}:8082"
+      - "127.0.0.1:${PREVENTION_RECOVERY_PORT:-8089}:8089"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m,mode=0700,uid=10001,gid=10001
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    mem_limit: 768m
+    cpus: "1.5"
+    healthcheck:
+      test: ["CMD", "/prevention-gateway", "healthcheck"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+    depends_on:
+      app:
+        condition: service_healthy
+      nginx:
+        condition: service_started
+    networks:
+      flare-internal:
+        ipv4_address: ${FLARE_GATEWAY_PRIVATE_IP:-172.30.0.50}
+
   nginx-logs-init:
     volumes:
       - /opt/flare/nginx-logs:/var/log/nginx
 
   nginx:
+    ports: !reset []
+    environment:
+      NGINX_TRUSTED_PROXY_CIDR: "${FLARE_GATEWAY_PRIVATE_IP:-172.30.0.50}/32"
     volumes:
       - /opt/flare/nginx-logs:/var/log/nginx
 
@@ -22,3 +153,10 @@ services:
   filebeat-data-init:
     volumes:
       - /opt/flare/filebeat-data:/var/lib/filebeat
+
+volumes:
+  ueba-model-data:
+
+networks:
+  ueba-internal:
+    internal: true

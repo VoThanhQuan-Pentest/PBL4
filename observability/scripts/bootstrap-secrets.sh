@@ -23,6 +23,7 @@ required_files=(
   "${MONITOR_DIR}/kibana-system.password"
   "${MONITOR_DIR}/logstash-internal.password"
   "${MONITOR_DIR}/analyst.password"
+  "${MONITOR_DIR}/siem-reader.password"
   "${MONITOR_DIR}/ca.crt"
   "${MONITOR_DIR}/ca.key"
   "${MONITOR_DIR}/elasticsearch.crt"
@@ -35,6 +36,21 @@ required_files=(
   "${WEB_DIR}/filebeat-web.crt"
   "${WEB_DIR}/filebeat-web.key"
 )
+
+# Upgrade an already complete pre-SIEM secret set without rotating any existing
+# credential or certificate. Partial legacy sets still fail closed below.
+if [ ! -e "${MONITOR_DIR}/siem-reader.password" ]; then
+  legacy_complete=true
+  for path in "${required_files[@]}"; do
+    [ "$path" = "${MONITOR_DIR}/siem-reader.password" ] && continue
+    [ -e "$path" ] || legacy_complete=false
+  done
+  if [ "$legacy_complete" = true ]; then
+    umask 077
+    openssl rand -hex 24 >"${MONITOR_DIR}/siem-reader.password"
+    chmod 0600 "${MONITOR_DIR}/siem-reader.password"
+  fi
+fi
 
 secure_filebeat_key() {
   # Bind mounts preserve numeric ownership. GitHub-hosted runners are not UID
@@ -58,11 +74,13 @@ secure_monitor_runtime_secrets() {
     -v "${MONITOR_DIR}/logstash.key:/logstash.key" \
     -v "${MONITOR_DIR}/logstash.keystore:/logstash.keystore" \
     -v "${MONITOR_DIR}/kibana.keystore:/kibana.keystore" \
+    -v "${MONITOR_DIR}/siem-reader.password:/siem-reader.password" \
     --entrypoint sh "$FILEBEAT_IMAGE" -ceu '
       chgrp 0 /elasticsearch.password /elasticsearch.key
       chgrp 1000 /logstash.key /logstash.keystore /kibana.keystore
+      chgrp 10001 /siem-reader.password
       chmod 0640 /elasticsearch.password /elasticsearch.key \
-        /logstash.key /logstash.keystore /kibana.keystore
+        /logstash.key /logstash.keystore /kibana.keystore /siem-reader.password
     '
 
   # Exercise the actual non-owner group-read path used on GitHub-hosted
@@ -78,6 +96,9 @@ secure_monitor_runtime_secrets() {
     -v "${MONITOR_DIR}/kibana.keystore:/kibana.keystore:ro" \
     --entrypoint sh "$FILEBEAT_IMAGE" \
     -ceu 'test -r /logstash.key && test -r /logstash.keystore && test -r /kibana.keystore'
+  docker run --rm --network none --read-only --cap-drop ALL --user 65534:10001 \
+    -v "${MONITOR_DIR}/siem-reader.password:/siem-reader.password:ro" \
+    --entrypoint sh "$FILEBEAT_IMAGE" -ceu 'test -r /siem-reader.password'
 }
 
 existing=0
@@ -85,6 +106,14 @@ for path in "${required_files[@]}"; do
   [ ! -e "$path" ] || existing=$((existing + 1))
 done
 if [ "$existing" -eq "${#required_files[@]}" ]; then
+  if ! cmp -s "${MONITOR_DIR}/ca.crt" "${WEB_DIR}/ca.crt" \
+      || ! openssl verify -CAfile "${MONITOR_DIR}/ca.crt" "${MONITOR_DIR}/logstash.crt" >/dev/null 2>&1 \
+      || ! openssl verify -CAfile "${MONITOR_DIR}/ca.crt" "${MONITOR_DIR}/elasticsearch.crt" >/dev/null 2>&1 \
+      || ! openssl verify -CAfile "${MONITOR_DIR}/ca.crt" "${WEB_DIR}/filebeat-web.crt" >/dev/null 2>&1; then
+    printf 'Observability certificate set is inconsistent; refusing to start with mismatched Web and Monitor trust.\n' >&2
+    printf 'Archive the current secret directory and perform an intentional full certificate rotation.\n' >&2
+    exit 1
+  fi
   chmod 0700 "$SECRETS_DIR" "$MONITOR_DIR" "$WEB_DIR"
   chmod 0600 "${MONITOR_DIR}"/*.password "${MONITOR_DIR}"/*.key \
     "${MONITOR_DIR}"/*.keystore
@@ -117,7 +146,7 @@ write_secret() {
   chmod 0600 "$path"
 }
 
-for name in elasticsearch kibana-system logstash-internal analyst; do
+for name in elasticsearch kibana-system logstash-internal analyst siem-reader; do
   write_secret "${MONITOR_DIR}/${name}.password"
 done
 

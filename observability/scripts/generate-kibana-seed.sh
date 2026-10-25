@@ -75,7 +75,7 @@ emit_dashboard() {
 match_all='{"match_all":{}}'
 access_index='logs-nginx.access-lab'
 
-jq -nc '{type:"index-pattern",id:"flare-nginx-logs",attributes:{title:"logs-nginx.*-lab",timeFieldName:"@timestamp",name:"Flare Lab Nginx logs"},references:[]}'
+jq -nc '{type:"index-pattern",id:"flare-nginx-logs",attributes:{title:"logs-*-lab",timeFieldName:"@timestamp",name:"Flare Lab logs"},references:[]}'
 emit_search flare-overview-events 'Flare Overview — latest requests' '*' '["source.ip","http.request.method","url.path","http.response.status_code","event.duration","user_agent.original"]'
 emit_search flare-geo-events 'Flare GeoIP — public sources' 'source.geo.location: *' '["source.ip","source.geo.country_iso_code","source.geo.city_name","source.as.number","source.as.organization.name"]'
 emit_search flare-security-events 'Flare Security — latest signals' 'http.response.status_code >= 400 or flare.detection.type: *' '["source.ip","url.path","http.response.status_code","flare.detection.type","flare.detection.severity"]'

@@ -1,0 +1,187 @@
+{
+  "index_patterns": [
+    "logs-flare.security-lab"
+  ],
+  "priority": 510,
+  "data_stream": {},
+  "template": {
+    "settings": {
+      "index.number_of_shards": 1,
+      "index.number_of_replicas": 0
+    },
+    "lifecycle": {
+      "data_retention": "30d"
+    },
+    "mappings": {
+      "dynamic": false,
+      "properties": {
+        "@timestamp": {
+          "type": "date"
+        },
+        "event": {
+          "properties": {
+            "id": {
+              "type": "keyword"
+            },
+            "ingested": {
+              "type": "date"
+            },
+            "dataset": {
+              "type": "keyword"
+            },
+            "type": {
+              "type": "keyword"
+            },
+            "action": {
+              "type": "keyword"
+            },
+            "outcome": {
+              "type": "keyword"
+            }
+          }
+        },
+        "trace": {
+          "properties": {
+            "id": {
+              "type": "keyword"
+            }
+          }
+        },
+        "user": {
+          "properties": {
+            "id": {
+              "type": "keyword"
+            },
+            "name": {
+              "type": "keyword"
+            }
+          }
+        },
+        "target": {
+          "properties": {
+            "user": {
+              "properties": {
+                "id": {
+                  "type": "keyword"
+                }
+              }
+            }
+          }
+        },
+        "source": {
+          "properties": {
+            "ip": {
+              "type": "ip"
+            },
+            "geo": {
+              "properties": {
+                "country_iso_code": {
+                  "type": "keyword"
+                },
+                "country_name": {
+                  "type": "keyword"
+                },
+                "city_name": {
+                  "type": "keyword"
+                },
+                "location": {
+                  "type": "geo_point"
+                }
+              }
+            },
+            "as": {
+              "properties": {
+                "number": {
+                  "type": "long"
+                },
+                "organization": {
+                  "properties": {
+                    "name": {
+                      "type": "keyword"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "http": {
+          "properties": {
+            "request": {
+              "properties": {
+                "method": {
+                  "type": "keyword"
+                }
+              }
+            },
+            "response": {
+              "properties": {
+                "status_code": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "user_agent": {
+          "properties": {
+            "family": {
+              "type": "keyword"
+            }
+          }
+        },
+        "flare": {
+          "properties": {
+            "route_group": {
+              "type": "keyword"
+            },
+            "source_ip_scope": {
+              "type": "keyword"
+            },
+            "synthetic": {
+              "type": "boolean"
+            },
+            "demo_label": {
+              "type": "keyword"
+            },
+            "auth": {
+              "properties": {
+                "request_id": {
+                  "type": "keyword"
+                },
+                "target_fingerprint": {
+                  "type": "keyword"
+                },
+                "fingerprint_key_id": {
+                  "type": "keyword"
+                },
+                "denial_reason": {
+                  "type": "keyword"
+                },
+                "challenge_reference": {
+                  "type": "keyword"
+                },
+                "revocation_reference": {
+                  "type": "keyword"
+                },
+                "execution_request_id": {
+                  "type": "keyword"
+                }
+              }
+            }
+          }
+        },
+        "observer": {
+          "properties": {
+            "type": {
+              "type": "keyword"
+            }
+          }
+        }
+      }
+    }
+  },
+  "_meta": {
+    "description": "Server-authored customer security events"
+  }
+}

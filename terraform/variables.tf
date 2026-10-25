@@ -4,6 +4,23 @@ variable "aws_region" {
   default     = "ap-southeast-1"
 }
 
+variable "availability_zone" {
+  description = "Preflight-selected AZ offering both instance types; null preserves automatic selection."
+  type        = string
+  default     = null
+}
+
+variable "ubuntu_ami_id" {
+  description = "Optional pinned Canonical Ubuntu 24.04 AMI. Pin the deployed image for updates; null selects the latest matching image for a fresh lab."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.ubuntu_ami_id == null || can(regex("^ami-[0-9a-f]{8,17}$", var.ubuntu_ami_id))
+    error_message = "ubuntu_ami_id must be null or a valid EC2 AMI ID."
+  }
+}
+
 variable "project_name" {
   description = "Prefix for AWS resources and tags."
   type        = string
@@ -49,13 +66,13 @@ variable "ssh_public_key" {
 variable "web_instance_type" {
   description = "Instance type for Nginx, Spring Boot, MySQL, Redis and Filebeat."
   type        = string
-  default     = "t3.medium"
+  default     = "m7i-flex.large"
 }
 
 variable "monitor_instance_type" {
   description = "Instance type for Elasticsearch, Logstash and Kibana."
   type        = string
-  default     = "t3.large"
+  default     = "m7i-flex.large"
 }
 
 variable "web_root_volume_gb" {
@@ -107,7 +124,7 @@ variable "monthly_budget_usd" {
   default     = 40
 
   validation {
-    condition     = var.monthly_budget_usd > 0
-    error_message = "monthly_budget_usd must be positive."
+    condition     = var.monthly_budget_usd > 0 && var.monthly_budget_usd <= 40
+    error_message = "monthly_budget_usd must be positive and must not exceed the agreed USD 40 account budget."
   }
 }

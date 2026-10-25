@@ -40,5 +40,13 @@ output "ssh_monitor_command" {
 
 output "kibana_tunnel_command" {
   description = "Kibana has no Internet-facing security-group rule; access it through this SSH tunnel."
-  value       = "ssh -L 5601:127.0.0.1:5601 ubuntu@${aws_eip.monitor.public_ip}"
+  value       = "ssh -N -o ExitOnForwardFailure=yes -L 127.0.0.1:15601:127.0.0.1:5601 ubuntu@${aws_eip.monitor.public_ip}"
+}
+
+output "soc_tunnel_command" {
+  value = "ssh -N -o ExitOnForwardFailure=yes -L 127.0.0.1:18089:127.0.0.1:8089 ubuntu@${aws_eip.web.public_ip}"
+}
+
+output "web_tunnel_command" {
+  value = "ssh -N -o ExitOnForwardFailure=yes -L 127.0.0.1:18088:127.0.0.1:80 ubuntu@${aws_eip.web.public_ip}"
 }

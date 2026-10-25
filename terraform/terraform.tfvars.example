@@ -7,9 +7,10 @@ budget_email = "team@example.test"
 
 # Optional defaults shown explicitly for a reproducible lab.
 aws_region             = "ap-southeast-1"
+ubuntu_ami_id          = "ami-0123456789abcdef0" # Pin the Canonical Ubuntu 24.04 AMI selected by preflight.
 project_name           = "flare-aws-elk-lab"
-web_instance_type      = "t3.medium"
-monitor_instance_type  = "t3.large"
+web_instance_type      = "m7i-flex.large"
+monitor_instance_type  = "m7i-flex.large"
 web_root_volume_gb     = 40
 monitor_root_volume_gb = 20
 monitor_data_volume_gb = 80

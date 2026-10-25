@@ -1,0 +1,130 @@
+{
+  "index_patterns": [
+    "logs-flare.prevention-lab"
+  ],
+  "priority": 520,
+  "data_stream": {},
+  "template": {
+    "settings": {
+      "index.number_of_shards": 1,
+      "index.number_of_replicas": 0
+    },
+    "lifecycle": {
+      "data_retention": "30d"
+    },
+    "mappings": {
+      "dynamic": false,
+      "properties": {
+        "@timestamp": {
+          "type": "date"
+        },
+        "event": {
+          "properties": {
+            "id": {
+              "type": "keyword"
+            },
+            "ingested": {
+              "type": "date"
+            },
+            "dataset": {
+              "type": "keyword"
+            },
+            "type": {
+              "type": "keyword"
+            },
+            "action": {
+              "type": "keyword"
+            }
+          }
+        },
+        "trace": {
+          "properties": {
+            "id": {
+              "type": "keyword"
+            }
+          }
+        },
+        "source": {
+          "properties": {
+            "ip": {
+              "type": "ip"
+            },
+            "geo": {
+              "properties": {
+                "country_iso_code": {
+                  "type": "keyword"
+                },
+                "country_name": {
+                  "type": "keyword"
+                },
+                "city_name": {
+                  "type": "keyword"
+                },
+                "location": {
+                  "type": "geo_point"
+                }
+              }
+            },
+            "as": {
+              "properties": {
+                "number": {
+                  "type": "long"
+                },
+                "organization": {
+                  "properties": {
+                    "name": {
+                      "type": "keyword"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "flare": {
+          "properties": {
+            "source_ip_scope": {
+              "type": "keyword"
+            },
+            "prevention": {
+              "properties": {
+                "rule_id": {
+                  "type": "keyword"
+                },
+                "policy_version": {
+                  "type": "long"
+                },
+                "count": {
+                  "type": "integer"
+                },
+                "provenance": {
+                  "type": "keyword"
+                }
+              }
+            }
+          }
+        },
+        "observer": {
+          "properties": {
+            "type": {
+              "type": "keyword"
+            }
+          }
+        },
+        "destination": {
+          "properties": {
+            "ip": {
+              "type": "ip"
+            },
+            "port": {
+              "type": "integer"
+            }
+          }
+        }
+      }
+    }
+  },
+  "_meta": {
+    "description": "Allowlisted WAF decisions; no request body, cookie, or raw URI"
+  }
+}
