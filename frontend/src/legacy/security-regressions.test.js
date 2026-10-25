@@ -99,6 +99,9 @@ describe('legacy storefront security regressions', () => {
     expect(apiSource).toContain("acknowledgedAuthEpoch === String(readStoredValue(AUTH_EPOCH_KEY, '') || '')");
     expect(apiSource).toContain('if (auth && !isAuthContextCurrent(requestAuthContext))');
     expect(apiSource).toContain('response.status === 401 && auth && hasAuthenticatedSession()');
+    expect(apiSource).toContain("response.status === 403 && unsafeMethod && data?.code === 'CSRF_INVALID'");
+    expect(apiSource).toContain("headers['X-XSRF-TOKEN'] = await ensureCsrfToken();");
+    expect(apiSource).toContain('Never retry a generic authorization failure.');
     expect(syncSource).toContain('const scheduledAuthContext = auth ? captureAuthContext() : null;');
     expect(syncSource).toContain('!isAuthContextCurrent(scheduledAuthContext)');
   });

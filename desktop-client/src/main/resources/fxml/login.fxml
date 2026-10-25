@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?import javafx.geometry.Insets?>
+<?import javafx.scene.control.*?>
+<?import javafx.scene.layout.*?>
+<VBox xmlns:fx="http://javafx.com/fxml/1" fx:controller="com.flarefitness.monitor.controller.LoginController"
+      alignment="CENTER" spacing="24" styleClass="login-root">
+    <padding><Insets top="40" right="70" bottom="40" left="70"/></padding>
+    <Label text="FLARE / SOC" styleClass="brand-mark"/>
+    <VBox maxWidth="380" spacing="12" styleClass="login-card">
+        <Label text="Username" labelFor="$username"/>
+        <TextField fx:id="username" promptText="Username" onAction="#login"/>
+        <Label text="Password" labelFor="$password"/>
+        <PasswordField fx:id="password" promptText="Password" onAction="#login"/>
+        <Label fx:id="errorLabel" styleClass="error-text" wrapText="true"/>
+        <Button fx:id="loginButton" text="Đăng nhập" onAction="#login" defaultButton="true" maxWidth="Infinity" styleClass="primary-button"/>
+    </VBox>
+</VBox>

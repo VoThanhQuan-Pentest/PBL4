@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import javafx.geometry.Insets?>
+<?import javafx.scene.control.Button?>
+<?import javafx.scene.control.Label?>
+<?import javafx.scene.layout.BorderPane?>
+<?import javafx.scene.layout.HBox?>
+<?import javafx.scene.layout.Region?>
+<?import javafx.scene.layout.VBox?>
+
+<BorderPane xmlns:fx="http://javafx.com/fxml/1"
+            fx:controller="com.flarefitness.monitor.controller.DashboardController"
+            styleClass="app-root">
+    <left>
+        <VBox prefWidth="238" spacing="8" styleClass="sidebar">
+            <padding><Insets top="24" right="16" bottom="20" left="16"/></padding>
+            <Label text="FLARE / SOC" styleClass="brand-mark"/>
+            <Label text="SECURITY MONITOR" styleClass="sidebar-subtitle"/>
+            <Region prefHeight="25"/>
+            <Button text="Dashboard" onAction="#showOverview" maxWidth="Infinity" styleClass="nav-button"/>
+            <Button text="Incident queue" onAction="#showAlerts" maxWidth="Infinity" styleClass="nav-button"/>
+            <Button text="Block IP" onAction="#showIpBlocks" maxWidth="Infinity" styleClass="nav-button"/>
+            <Button text="History" onAction="#showHistory" maxWidth="Infinity" styleClass="nav-button"/>
+            <Button text="GeoIP &amp; IP intelligence" onAction="#showGeoIntelligence" maxWidth="Infinity" styleClass="nav-button" wrapText="true"/>
+            <Region VBox.vgrow="ALWAYS"/>
+            <Label fx:id="userLabel" styleClass="sidebar-user" wrapText="true"/>
+            <Button text="Sign out" onAction="#logout" maxWidth="Infinity" styleClass="ghost-button"/>
+        </VBox>
+    </left>
+    <top>
+        <HBox alignment="CENTER_LEFT" spacing="14" styleClass="topbar">
+            <padding><Insets top="18" right="24" bottom="18" left="26"/></padding>
+            <VBox spacing="2">
+                <Label fx:id="pageTitle" text="Security overview" styleClass="page-title"/>
+                <Label fx:id="refreshedLabel" text="Waiting for first refresh" styleClass="muted"/>
+            </VBox>
+            <Region HBox.hgrow="ALWAYS"/>
+            <Label fx:id="connectionLabel" text="CONNECTING" styleClass="status-pill"/>
+            <Button text="Admin / Health" onAction="#showSettings" styleClass="secondary-button"/>
+            <Button text="↻ Refresh" onAction="#manualRefresh" styleClass="secondary-button"/>
+        </HBox>
+    </top>
+    <center>
+        <VBox fx:id="contentHost" spacing="14" styleClass="content-host">
+            <padding><Insets top="20" right="24" bottom="24" left="24"/></padding>
+        </VBox>
+    </center>
+</BorderPane>

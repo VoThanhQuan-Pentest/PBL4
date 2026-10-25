@@ -1,6 +1,7 @@
 import { API_BASE, STORAGE_KEYS, UNSAFE_HTTP_METHODS } from '../core/config.js';
 import { getCsrfToken, resetCsrfToken } from '../core/csrf.js';
 import { escapeHtml, isSafeImageSource, safeClassToken } from '../core/dom-safety.js';
+import { confirmSensitiveAction } from '../core/sensitive-action-confirmation.js';
 import {
     getImmutableUserId,
     getOrderUserId,
@@ -1622,8 +1623,11 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
+        let profileSubmissionPending = false;
+        let passwordSubmissionPending = false;
         profileForm.addEventListener('submit', async event => {
             event.preventDefault();
+            if (profileSubmissionPending) return;
             hideInlineError(profileError);
 
             const profileEmail = document.getElementById('edit-email').value.trim();
@@ -1640,8 +1644,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
+            profileSubmissionPending = true;
             try {
-                currentUser = normalizeUserProfile(await apiRequest('/profile', {
+                const authContext = captureAuthContext();
+                const confirmed = emailChanged ? await confirmSensitiveAction({ apiRequest,
+                    operation: 'EMAIL_CHANGE', form: profileForm, overlay: profileOverlay,
+                    isAuthCurrent: () => isAuthContextCurrent(authContext),
+                    payload: { ho_ten: document.getElementById('edit-name').value.trim(), email: profileEmail,
+                        sdt: profilePhone, otp_code: otpCode }
+                }) : null;
+                currentUser = normalizeUserProfile(confirmed ? confirmed.profile : await apiRequest('/profile', {
                     method: 'PUT',
                     body: {
                         ho_ten: document.getElementById('edit-name').value.trim(),
@@ -1655,11 +1667,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 alert('Cập nhật thông tin thành công.');
             } catch (error) {
                 showInlineError(profileError, error.message);
+            } finally {
+                profileSubmissionPending = false;
             }
         });
 
         passwordForm.addEventListener('submit', async event => {
             event.preventDefault();
+            if (passwordSubmissionPending) return;
             passError.classList.add('hidden');
 
             const currentPassword = document.getElementById('current-password').value;
@@ -1678,8 +1693,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
+            passwordSubmissionPending = true;
             try {
-                await apiRequest('/profile/password', {
+                const authContext = captureAuthContext();
+                const confirmed = await confirmSensitiveAction({ apiRequest,
+                    operation: 'PASSWORD_CHANGE', form: passwordForm, overlay: passwordOverlay,
+                    isAuthCurrent: () => isAuthContextCurrent(authContext),
+                    payload: { current_password: currentPassword, new_password: newPassword, confirm_password: confirmPassword }
+                });
+                if (!confirmed) await apiRequest('/profile/password', {
                     method: 'PUT',
                     body: {
                         current_password: currentPassword,
@@ -1695,6 +1717,8 @@ document.addEventListener('DOMContentLoaded', () => {
             } catch (error) {
                 passError.textContent = error.message;
                 passError.classList.remove('hidden');
+            } finally {
+                passwordSubmissionPending = false;
             }
         });
 
@@ -4624,13 +4648,15 @@ document.addEventListener('DOMContentLoaded', () => {
             body,
             auth = true
         } = options;
+        const normalizedMethod = method.toUpperCase();
+        const unsafeMethod = UNSAFE_HTTP_METHODS.has(normalizedMethod);
         const requestAuthContext = auth ? captureAuthContext() : null;
 
         const headers = {
             'Content-Type': 'application/json'
         };
 
-        if (UNSAFE_HTTP_METHODS.has(method.toUpperCase())) {
+        if (unsafeMethod) {
             try {
                 headers['X-XSRF-TOKEN'] = await ensureCsrfToken();
             } catch (error) {
@@ -4665,15 +4691,48 @@ document.addEventListener('DOMContentLoaded', () => {
             throw createStaleAuthContextError();
         }
 
-        if (response.status === 204) {
-            return null;
-        }
-
-        const text = await response.text();
+        let text = response.status === 204 ? '' : await response.text();
         if (auth && !isAuthContextCurrent(requestAuthContext)) {
             throw createStaleAuthContextError();
         }
-        const data = text ? normalizePayload(safeJsonParse(text)) : null;
+        let data = text ? normalizePayload(safeJsonParse(text)) : null;
+
+        // A second same-origin tab can rotate the CSRF cookie while this tab
+        // still caches the previous masked token. A CSRF rejection happens
+        // before the controller executes, so one refresh-and-retry is safe.
+        // Never retry a generic authorization failure.
+        if (response.status === 403 && unsafeMethod && data?.code === 'CSRF_INVALID') {
+            resetCsrfToken();
+            headers['X-XSRF-TOKEN'] = await ensureCsrfToken();
+            if (auth) {
+                assertAuthContextCurrent(requestAuthContext);
+            }
+            try {
+                response = await fetch(`${API_BASE}${path}`, {
+                    method,
+                    headers,
+                    body: body ? JSON.stringify(body) : undefined,
+                    credentials: 'same-origin'
+                });
+            } catch (error) {
+                if (auth && !isAuthContextCurrent(requestAuthContext)) {
+                    throw createStaleAuthContextError();
+                }
+                throw error;
+            }
+            if (auth && !isAuthContextCurrent(requestAuthContext)) {
+                throw createStaleAuthContextError();
+            }
+            text = response.status === 204 ? '' : await response.text();
+            if (auth && !isAuthContextCurrent(requestAuthContext)) {
+                throw createStaleAuthContextError();
+            }
+            data = text ? normalizePayload(safeJsonParse(text)) : null;
+        }
+
+        if (response.status === 204) {
+            return null;
+        }
 
         if (!response.ok) {
             const message = buildApiErrorMessage(path, response, text, data);
@@ -4684,6 +4743,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 clearSession();
             }
             const error = new Error(message);
+            error.code = data?.code;
+            error.decisionId = data?.decision_id;
+            error.retryAfterSeconds = Number(data?.retry_after_seconds ?? response.headers.get('Retry-After'));
             error.httpStatus = response.status;
             error.responseReceived = true;
             throw error;
@@ -7418,6 +7480,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!overlay) {
             return;
         }
+        overlay.dispatchEvent(new Event('overlay:close'));
 
         if (overlay === cartItemOverlay) {
             resetCartConfiguratorState();
@@ -15635,6 +15698,21 @@ document.addEventListener('DOMContentLoaded', () => {
             || normalizedRole.includes('nh n vi n')
         ) {
             return 'Nh\u00e2n vi\u00ean';
+        }
+
+        if (normalizedRole === 'soc l2' || normalizedRole === 'role soc l2') {
+            return 'SOC L2';
+        }
+        if (normalizedRole === 'soc l1' || normalizedRole === 'role soc l1') {
+            return 'SOC L1';
+        }
+        if (
+            normalizedRole === 'analyst'
+            || normalizedRole.includes('security analyst')
+            || normalizedRole.includes('chuyen vien an ninh')
+            || normalizedRole.includes('chuyen vien bao mat')
+        ) {
+            return 'SOC L1';
         }
 
         if (
