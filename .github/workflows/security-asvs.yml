@@ -80,6 +80,13 @@ jobs:
           npx playwright install --with-deps chromium
       - name: Create the isolated trusted TLS frontend
         run: python3 scripts/security/prepare_ci_tls.py
+      - name: Verify read-only TLS configuration before building the full stack
+        run: |
+          docker compose --env-file .env.e2e.example --project-name "$COMPOSE_PROJECT_NAME" --profile observability \
+            -f docker-compose.yml -f docker-compose.e2e.yml \
+            -f observability/docker-compose.monitor.yml -f observability/docker-compose.local.yml \
+            -f security/asvs/docker-compose.tls.yml run --rm --no-deps \
+            --add-host gateway:127.0.0.1 tls-edge -t -c /etc/nginx/asvs.conf
       - name: Start the existing full-stack composition with ASVS resource limits
         run: |
           observability/scripts/local-lab.sh up
@@ -87,7 +94,7 @@ jobs:
             -f docker-compose.yml -f docker-compose.e2e.yml \
             -f observability/docker-compose.monitor.yml -f observability/docker-compose.local.yml \
             -f security/asvs/docker-compose.tls.yml up -d --no-deps tls-edge
-          curl --fail --silent --show-error --max-time 10 https://app.soc.test:8443/api/health > /dev/null
+          curl --fail --silent --show-error --max-time 10 --retry 10 --retry-connrefused --retry-delay 1 --retry-max-time 30 https://app.soc.test:8443/api/health > /dev/null
       - name: Verify real HTTPS, secure browser cookies, cross-site isolation and revocation
         working-directory: frontend
         env:
