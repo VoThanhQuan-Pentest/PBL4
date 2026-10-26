@@ -33,8 +33,10 @@ class EmailOtpScopedProofTest {
     @Mock StringRedisTemplate redis;
     @Mock ValueOperations<String, String> values;
     EmailOtpService service;
+    final org.springframework.security.crypto.password.PasswordEncoder encoder =
+            new com.flarefitness.backend.security.BcryptSha256PasswordEncoder(4);
     @BeforeEach void setup() {
-        service = new EmailOtpService(mail, redis, "test:otp:", 300, 60, "fixture", "fixture@example.test", "fixture", 5);
+        service = new EmailOtpService(mail, redis, "test:otp:", 300, 60, "fixture", "fixture@example.test", "fixture", 5, encoder);
     }
     private void writable() {
         when(redis.opsForValue()).thenReturn(values);
@@ -42,7 +44,9 @@ class EmailOtpScopedProofTest {
     }
     @Test void legacyEmailOtpKeepsItsNamespaceCooldownAndRecipient() {
         writable(); service.sendOtp(EmailOtpService.PURPOSE_PROFILE_EMAIL, " Owner@Example.Test ");
-        verify(values).set(eq("test:otp:PROFILE_EMAIL:owner@example.test"), anyString(), eq(Duration.ofSeconds(300)));
+        ArgumentCaptor<String> stored = ArgumentCaptor.forClass(String.class);
+        verify(values).set(eq("test:otp:PROFILE_EMAIL:owner@example.test"), stored.capture(), eq(Duration.ofSeconds(300)));
+        assertThat(stored.getValue()).startsWith("h1:{bcrypt-sha256}");
         verify(values).setIfAbsent("test:otp:cooldown:PROFILE_EMAIL:owner@example.test", "1", Duration.ofSeconds(60));
         ArgumentCaptor<SimpleMailMessage> sent = ArgumentCaptor.forClass(SimpleMailMessage.class);
         verify(mail).send(sent.capture()); assertThat(sent.getValue().getTo()).containsExactly("owner@example.test");
@@ -52,11 +56,13 @@ class EmailOtpScopedProofTest {
         service.sendLabActionProofOtp("owner@example.test", scope);
         verify(values).set(eq("test:otp:LAB_ACTION_PROOF:" + scope + ":owner@example.test"), anyString(), eq(Duration.ofSeconds(300)));
         verify(values).setIfAbsent("test:otp:cooldown:LAB_ACTION_PROOF:owner@example.test", "1", Duration.ofSeconds(60));
-        doReturn(1L).when(redis).execute(any(), anyList(), any(), any(), any());
+        String stored = "h1:" + encoder.encode("123456");
+        when(values.get("test:otp:LAB_ACTION_PROOF:" + scope + ":owner@example.test")).thenReturn(stored);
+        doReturn(1L).when(redis).execute(any(), anyList(), any(), any(), any(), any());
         service.verifyLabActionProofOtp("owner@example.test", scope, "123456");
         verify(redis).execute(any(), eq(List.of("test:otp:LAB_ACTION_PROOF:" + scope + ":owner@example.test",
                 "test:otp:attempt:LAB_ACTION_PROOF:" + scope + ":owner@example.test",
-                "test:otp:cooldown:LAB_ACTION_PROOF:owner@example.test")), eq("123456"), eq("5"), eq("300"));
+                "test:otp:cooldown:LAB_ACTION_PROOF:owner@example.test")), eq(stored), eq("5"), eq("300"), eq("1"));
     }
     @Test void recoveryCodesUseServerIdentityScopeButKeepTheMailboxCooldown() {
         writable();
@@ -68,11 +74,11 @@ class EmailOtpScopedProofTest {
         owner.setId("account-b");
         String newScope = com.flarefitness.backend.security.PasswordResetTokenStore.recoveryScope(owner);
         assertThat(newScope).isNotEqualTo(issuedScope);
-        doReturn(0L).when(redis).execute(any(), anyList(), any(), any(), any());
+        doReturn(0L).when(redis).execute(any(), anyList(), any(), any(), any(), any());
         assertThatThrownBy(() -> service.verifyRecoveryOtp(owner, "123456")).isInstanceOf(BadRequestException.class);
         verify(redis).execute(any(), eq(List.of("test:otp:FORGOT_PASSWORD:" + newScope + ":owner@example.test",
                 "test:otp:attempt:FORGOT_PASSWORD:" + newScope + ":owner@example.test",
-                "test:otp:cooldown:FORGOT_PASSWORD:owner@example.test")), eq("123456"), eq("5"), eq("300"));
+                "test:otp:cooldown:FORGOT_PASSWORD:owner@example.test")), eq(""), eq("5"), eq("300"), eq("0"));
     }
 
     @Test void malformedScopesAreRejectedBeforeMailOrRedis() {

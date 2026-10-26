@@ -23,9 +23,11 @@ class SensitiveActionOtpTest {
     @SuppressWarnings("unchecked") final ValueOperations<String, String> values = mock(ValueOperations.class);
     final String scope = "a".repeat(64), account = "b".repeat(64);
     EmailOtpService service;
+    final org.springframework.security.crypto.password.PasswordEncoder encoder =
+            new com.flarefitness.backend.security.BcryptSha256PasswordEncoder(4);
     @BeforeEach void setup() {
         service = new EmailOtpService(mail, redis, "test:", 900, 10,
-                "fixture", "fixture@example.test", "fixture", 99);
+                "fixture", "fixture@example.test", "fixture", 99, encoder);
     }
     @Test void clampsLifetimeAndCooldownAndShowsOperationWithoutChoosingDestinationAsRecipient() {
         when(redis.opsForValue()).thenReturn(values);
@@ -46,10 +48,13 @@ class SensitiveActionOtpTest {
         verifyNoInteractions(mail);
     }
     @Test void verificationUsesChallengeCodeAndAccountFailureBudgetWithFiveAttemptMaximum() {
-        doReturn(1L).when(redis).execute(any(), anyList(), any(), any(), any());
+        when(redis.opsForValue()).thenReturn(values);
+        String stored = "h1:" + encoder.encode("123456");
+        when(values.get("test:SENSITIVE_ACTION:" + scope + ":owner@example.test")).thenReturn(stored);
+        doReturn(1L).when(redis).execute(any(), anyList(), any(), any(), any(), any());
         service.verifySensitiveActionOtp("owner@example.test", scope, account, "123456");
         verify(redis).execute(any(), eq(List.of("test:SENSITIVE_ACTION:" + scope + ":owner@example.test",
-                "test:attempt:SENSITIVE_ACTION:" + account + ":owner@example.test")), eq("123456"), eq("5"), eq("300"));
+                "test:attempt:SENSITIVE_ACTION:" + account + ":owner@example.test")), eq(stored), eq("5"), eq("300"), eq("1"));
     }
     @Test void malformedScopesAndNewlineTargetsFailBeforeMailOrRedis() {
         assertThatThrownBy(() -> service.sendSensitiveActionOtp("owner@example.test", "bad", account, "EMAIL_CHANGE", "target@example.test"))

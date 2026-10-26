@@ -30,7 +30,8 @@ public class EmailOtpService {
             if failures >= tonumber(ARGV[2]) then return 3 end
             local code = redis.call('GET', KEYS[1])
             if not code then return 0 end
-            if code == ARGV[1] then
+            if code ~= ARGV[1] then return 4 end
+            if ARGV[4] == '1' then
               redis.call('DEL', KEYS[1])
               return 1
             end
@@ -49,7 +50,8 @@ public class EmailOtpService {
             if not code then
               return 0
             end
-            if code == ARGV[1] then
+            if code ~= ARGV[1] then return 4 end
+            if ARGV[4] == '1' then
               redis.call('DEL', KEYS[1], KEYS[2], KEYS[3])
               return 1
             end
@@ -78,7 +80,19 @@ public class EmailOtpService {
     private final String fromAddress;
     private final String mailPassword;
     private final int maxVerificationAttempts;
+    private final org.springframework.security.crypto.password.PasswordEncoder otpEncoder;
+    private static final String HASH_VERSION = "h1:";
 
+    /** Compatibility for in-process callers; Spring injects the shared production encoder below. */
+    public EmailOtpService(JavaMailSender mailSender, StringRedisTemplate redisTemplate, String redisPrefix,
+            long ttlSeconds, long cooldownSeconds, String mailUsername, String fromAddress,
+            String mailPassword, int maxVerificationAttempts) {
+        this(mailSender, redisTemplate, redisPrefix, ttlSeconds, cooldownSeconds, mailUsername,
+                fromAddress, mailPassword, maxVerificationAttempts,
+                new com.flarefitness.backend.security.BcryptSha256PasswordEncoder(12));
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
     public EmailOtpService(
             JavaMailSender mailSender,
             StringRedisTemplate redisTemplate,
@@ -88,7 +102,8 @@ public class EmailOtpService {
             @Value("${spring.mail.username:}") String mailUsername,
             @Value("${app.mail.from}") String fromAddress,
             @Value("${spring.mail.password:}") String mailPassword,
-            @Value("${app.otp.max-verification-attempts}") int maxVerificationAttempts
+            @Value("${app.otp.max-verification-attempts}") int maxVerificationAttempts,
+            org.springframework.security.crypto.password.PasswordEncoder otpEncoder
     ) {
         this.mailSender = mailSender;
         this.redisTemplate = redisTemplate;
@@ -99,6 +114,7 @@ public class EmailOtpService {
         this.fromAddress = fromAddress;
         this.mailPassword = mailPassword;
         this.maxVerificationAttempts = maxVerificationAttempts;
+        this.otpEncoder = otpEncoder;
     }
 
     public void sendOtp(String purpose, String email) {
@@ -145,7 +161,7 @@ public class EmailOtpService {
         }
         String key = otpKey(PURPOSE_SENSITIVE_ACTION + ":" + scope, recipient);
         String code = generateOtpCode();
-        redisTemplate.opsForValue().set(key, code, Duration.ofSeconds(sensitiveActionTtlSeconds()));
+        redisTemplate.opsForValue().set(key, HASH_VERSION + otpEncoder.encode(code), Duration.ofSeconds(sensitiveActionTtlSeconds()));
         SimpleMailMessage message = new SimpleMailMessage();
         message.setFrom(fromAddress);
         message.setTo(recipient);
@@ -167,11 +183,16 @@ public class EmailOtpService {
         requireSensitiveScope(scope, accountScope);
         if (code == null || !code.matches("\\d{6}")) throw new BadRequestException("Ma xac nhan phai gom 6 so.");
         String recipient = normalizeEmail(email);
+        String key = otpKey(PURPOSE_SENSITIVE_ACTION + ":" + scope, recipient);
+        String failuresKey = attemptKey(PURPOSE_SENSITIVE_ACTION + ":" + accountScope, recipient);
+        int maximum = Math.max(1, Math.min(5, maxVerificationAttempts));
+        assertVerificationBudget(failuresKey, maximum);
+        String stored = redisTemplate.opsForValue().get(key);
+        boolean matches = matchesStored(code, stored);
         Long result = redisTemplate.execute(VERIFY_SENSITIVE_ATOMICALLY,
-                List.of(otpKey(PURPOSE_SENSITIVE_ACTION + ":" + scope, recipient),
-                        attemptKey(PURPOSE_SENSITIVE_ACTION + ":" + accountScope, recipient)),
-                code, Integer.toString(Math.max(1, Math.min(5, maxVerificationAttempts))), "300");
-        if (result != null && result == 1L) return;
+                List.of(key, failuresKey), stored == null ? "" : stored,
+                Integer.toString(maximum), "300", matches ? "1" : "0");
+        if (result != null && result == 1L && matches) return;
         if (result != null && result == 3L) throw new TooManyRequestsException("Xac nhan dang tam khoa do nhap sai qua nhieu lan.");
         throw new com.flarefitness.backend.exception.ActionConfirmationCodeException();
     }
@@ -202,7 +223,7 @@ public class EmailOtpService {
         }
 
         String otpCode = generateOtpCode();
-        redisTemplate.opsForValue().set(otpKey(storagePurpose, normalizedEmail), otpCode, Duration.ofSeconds(ttlSeconds));
+        redisTemplate.opsForValue().set(otpKey(storagePurpose, normalizedEmail), HASH_VERSION + otpEncoder.encode(otpCode), Duration.ofSeconds(ttlSeconds));
         redisTemplate.delete(attemptKey(storagePurpose, normalizedEmail));
 
         SimpleMailMessage message = new SimpleMailMessage();
@@ -242,19 +263,36 @@ public class EmailOtpService {
 
         String key = otpKey(storagePurpose, normalizedEmail);
         String attemptKey = attemptKey(storagePurpose, normalizedEmail);
+        assertVerificationBudget(attemptKey, maxVerificationAttempts);
+        String stored = redisTemplate.opsForValue().get(key);
+        boolean matches = matchesStored(normalizedCode, stored);
         Long result = redisTemplate.execute(
                 VERIFY_OTP_ATOMICALLY,
                 List.of(key, attemptKey, cooldownKey(normalizedPurpose, normalizedEmail)),
-                normalizedCode,
+                stored == null ? "" : stored,
                 Integer.toString(maxVerificationAttempts),
-                Long.toString(Math.max(1L, ttlSeconds)));
-        if (result != null && result == 1L) {
+                Long.toString(Math.max(1L, ttlSeconds)), matches ? "1" : "0");
+        if (result != null && result == 1L && matches) {
             return;
         }
         if (result != null && result == 3L) {
             throw new TooManyRequestsException("Ma OTP da bi khoa do nhap sai qua nhieu lan. Vui long yeu cau ma moi.");
         }
         throw new BadRequestException("Ma OTP khong dung hoac da het han.");
+    }
+
+    private boolean matchesStored(String code, String stored) {
+        // Legacy plaintext codes deliberately cannot authorize after this storage upgrade.
+        if (stored == null || !stored.startsWith(HASH_VERSION)) return false;
+        try { return otpEncoder.matches(code, stored.substring(HASH_VERSION.length())); }
+        catch (IllegalArgumentException corruptedState) { return false; }
+    }
+
+    private void assertVerificationBudget(String key, int maximum) {
+        String failures = redisTemplate.opsForValue().get(key);
+        if (failures != null && Long.parseLong(failures) >= maximum) {
+            throw new TooManyRequestsException("Ma OTP da bi khoa do nhap sai qua nhieu lan. Vui long yeu cau ma moi.");
+        }
     }
 
     private void assertMailConfigured() {

@@ -50,6 +50,14 @@ lần sai trong 300 giây theo tài khoản, yêu cầu mã mới cách nhau 60 
 mã mới, quay lại bước mật khẩu; không lưu mật khẩu, mã hoặc challenge trên disk.
 Tài khoản thiếu email phải được xử lý qua quy trình quản trị hiện có.
 
+OTP email cho đăng ký, khôi phục, đổi email và xác nhận thao tác được lưu bằng
+hash có salt, dùng cùng encoder của ứng dụng. Redis chỉ nhận hash và kết quả
+đối chiếu; Lua kiểm tra lại đúng phiên bản hash trước khi tiêu thụ mã để tránh
+xác minh mã cũ làm mất mã vừa gửi lại. Thời hạn, cooldown và ngân sách thử vẫn
+giữ nguyên. Khi chuyển binary mới, mã plaintext còn đang chờ sẽ không được
+chấp nhận; người dùng yêu cầu mã mới sau cooldown. Không đổi tài khoản, mật
+khẩu, cấu hình OTP/mail hoặc dữ liệu lịch sử để thực hiện nâng cấp này.
+
 Chính sách mật khẩu mới dùng chung cho đăng ký, đổi/khôi phục và quản trị tạo/
 đổi mật khẩu: 12–128 ký tự Unicode, cho phép passphrase và giữ nguyên khoảng
 trắng/chữ hoa thường. Tài khoản đang có vẫn đăng nhập bằng mật khẩu hiện tại;
