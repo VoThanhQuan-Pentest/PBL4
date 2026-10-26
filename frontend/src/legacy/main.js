@@ -557,6 +557,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const resetPasswordError = document.getElementById('reset-password-error');
     const profileError = document.getElementById('profile-error');
     const profileEmailOtpInput = document.getElementById('edit-email-otp');
+    const profileEmailPasswordInput = document.getElementById('edit-email-password');
+    const profileEmailPasswordGroup = document.getElementById('profile-email-password-group');
+    document.getElementById('edit-email')?.addEventListener('input', event => {
+        const changed = normalizeEmailAddress(event.target.value) !== profileOriginalEmail;
+        profileEmailPasswordGroup?.classList.toggle('hidden', !changed);
+        if (!changed && profileEmailPasswordInput) profileEmailPasswordInput.value = '';
+    });
     const sendProfileEmailOtpButton = document.getElementById('send-profile-email-otp');
     const passError = document.getElementById('pass-error');
     const cartItemForm = document.getElementById('cart-item-form');
@@ -1248,6 +1255,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 document.getElementById('edit-email').value = profile.email || '';
                 document.getElementById('edit-phone').value = profile.sdt || '';
                 profileOriginalEmail = normalizeEmailAddress(profile.email);
+                if (profileEmailPasswordInput) profileEmailPasswordInput.value = '';
+                profileEmailPasswordGroup?.classList.add('hidden');
                 if (profileEmailOtpInput) {
                     profileEmailOtpInput.value = '';
                 }
@@ -1653,13 +1662,18 @@ document.addEventListener('DOMContentLoaded', () => {
                     payload: { ho_ten: document.getElementById('edit-name').value.trim(), email: profileEmail,
                         sdt: profilePhone, otp_code: otpCode }
                 }) : null;
+                const currentPassword = profileEmailPasswordInput?.value || '';
+                if (emailChanged && !confirmed && !currentPassword) {
+                    throw new Error('Vui lòng nhập mật khẩu hiện tại để xác minh đổi email.');
+                }
                 currentUser = normalizeUserProfile(confirmed ? confirmed.profile : await apiRequest('/profile', {
                     method: 'PUT',
                     body: {
                         ho_ten: document.getElementById('edit-name').value.trim(),
                         email: profileEmail,
                         sdt: profilePhone,
-                        otp_code: emailChanged ? otpCode : ''
+                        otp_code: emailChanged ? otpCode : '',
+                        current_password: emailChanged ? currentPassword : undefined
                     }
                 }));
                 closeOverlay(profileOverlay);
@@ -1668,6 +1682,7 @@ document.addEventListener('DOMContentLoaded', () => {
             } catch (error) {
                 showInlineError(profileError, error.message);
             } finally {
+                if (profileEmailPasswordInput) profileEmailPasswordInput.value = '';
                 profileSubmissionPending = false;
             }
         });
@@ -7481,6 +7496,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         overlay.dispatchEvent(new Event('overlay:close'));
+        if (overlay === profileOverlay && profileEmailPasswordInput) profileEmailPasswordInput.value = '';
 
         if (overlay === cartItemOverlay) {
             resetCartConfiguratorState();

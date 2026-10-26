@@ -47,7 +47,7 @@ async function storefront(page, { gatePreparation = false, policyRequired = true
         return respond({ id: 'immutable-action', operation: prepared.operation, state: 'COMMITTED', profile: user });
       }
       if (path === '/api/profile' && request.method() === 'PUT') {
-        user = { ...user, ...body }; return respond(user);
+        user = { ...user, ho_ten: body.ho_ten, email: body.email, sdt: body.sdt }; return respond(user);
       }
       if (path === '/api/profile/password') return route.fulfill({ status: 204, body: '' });
       if (path.startsWith('/api/products/')) return respond({ content: [], has_next: false });
@@ -157,4 +157,32 @@ test('the real password form preserves the server-disabled policy path', async (
   expect(app.preparations()).toHaveLength(0);
   expect(app.requests.filter(r => r.method === 'PUT')).toEqual([{ path: '/api/profile/password', method: 'PUT',
     body: { current_password: 'CurrentPassword1!', new_password: 'ReplacementPassword2!', confirm_password: 'ReplacementPassword2!' } }]);
+});
+
+
+test('direct recovery-email change requires a transient password when the optional policy is off', async ({ page }) => {
+  const app = await storefront(page, { policyRequired: false });
+  const form = await openForm(page, 'EMAIL_CHANGE');
+  await page.locator(form).locator('button[type="submit"]').click();
+  await expect(page.locator('#profile-error')).toContainText('mật khẩu hiện tại');
+  expect(app.requests.filter(r => r.path === '/api/profile' && r.method === 'PUT')).toHaveLength(0);
+  await page.locator('#edit-email-password').fill('CurrentPassword1!');
+  await page.locator(form).locator('button[type="submit"]').click();
+  await expect(page.locator('#profile-overlay')).toBeHidden();
+  const writes = app.requests.filter(r => r.path === '/api/profile' && r.method === 'PUT');
+  expect(writes).toHaveLength(1);
+  expect(writes[0].body.current_password).toBe('CurrentPassword1!');
+  expect(writes[0].body.otp_code).toBe('111111');
+  await expect(page.locator('#edit-email-password')).toHaveValue('');
+  const storage = await page.evaluate(() => JSON.stringify([Object.entries(localStorage), Object.entries(sessionStorage)]));
+  expect(storage).not.toContain('CurrentPassword1!');
+});
+
+test('closing the real profile form clears its recovery-email password', async ({ page }) => {
+  await storefront(page, { policyRequired: false });
+  await openForm(page, 'EMAIL_CHANGE');
+  await page.locator('#edit-email-password').fill('CurrentPassword1!');
+  await page.locator('#close-profile').click();
+  await expect(page.locator('#profile-overlay')).toBeHidden();
+  await expect(page.locator('#edit-email-password')).toHaveValue('');
 });

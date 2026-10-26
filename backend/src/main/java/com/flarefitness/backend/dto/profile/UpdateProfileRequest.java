@@ -3,6 +3,7 @@ package com.flarefitness.backend.dto.profile;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
 
 public record UpdateProfileRequest(
         @NotBlank(message = "Họ tên là bắt buộc.")
@@ -15,6 +16,11 @@ public record UpdateProfileRequest(
                 message = "Số điện thoại phải là số di động Việt Nam hợp lệ, ví dụ 0935250037 hoặc +84935250037."
         )
         String sdt,
-        String otpCode
+        String otpCode,
+        @Size(max = 128, message = "Mật khẩu không được vượt quá 128 ký tự.")
+        String currentPassword
 ) {
+    public UpdateProfileRequest(String hoTen, String email, String sdt, String otpCode) {
+        this(hoTen, email, sdt, otpCode, null);
+    }
 }

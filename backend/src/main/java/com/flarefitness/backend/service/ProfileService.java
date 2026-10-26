@@ -91,6 +91,12 @@ public class ProfileService {
         if (emailChanged && sensitiveActionPolicy.requiresConfirmation(user)) {
             throw new com.flarefitness.backend.exception.ActionConfirmationRequiredException();
         }
+        // Destination-mailbox ownership does not prove the session owner still
+        // controls an existing factor. Keep the separately confirmed path intact.
+        if (emailChanged && (request.currentPassword() == null || request.currentPassword().isBlank()
+                || !authService.passwordMatches(request.currentPassword(), user))) {
+            throw new BadRequestException("Mat khau hien tai khong dung.");
+        }
         return applyProfileUpdate(user, request, requestedEmail, emailChanged);
     }
 

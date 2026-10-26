@@ -115,6 +115,48 @@ class ProfileServiceTest {
         verify(redisTokenStore, never()).revokeAll(any());
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.NullAndEmptySource
+    @org.junit.jupiter.params.provider.ValueSource(strings = {" ", "incorrect"})
+    void emailChangeRequiresFreshPasswordBeforeConsumingDestinationOtp(String suppliedPassword) {
+        User user = new User(); user.setId("owner"); user.setUsername("owner");
+        user.setEmail("owner@example.test"); user.setRole("Admin");
+        when(userRepository.findByUsernameIgnoreCaseForUpdate("owner")).thenReturn(Optional.of(user));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> profileService.updateProfile("owner",
+                new UpdateProfileRequest("Owner", "attacker@example.test", "", "123456", suppliedPassword)))
+                .isInstanceOf(com.flarefitness.backend.exception.BadRequestException.class);
+        verify(emailOtpService, never()).verifyOtp(any(), any(), any());
+        verify(userRepository, never()).save(any());
+        org.assertj.core.api.Assertions.assertThat(user.getEmail()).isEqualTo("owner@example.test");
+    }
+
+    @Test void freshPasswordDoesNotReplaceDestinationMailboxVerification() {
+        User user = new User(); user.setId("owner"); user.setUsername("owner");
+        user.setEmail("owner@example.test"); user.setRole("Admin");
+        when(userRepository.findByUsernameIgnoreCaseForUpdate("owner")).thenReturn(Optional.of(user));
+        when(authService.passwordMatches("correct", user)).thenReturn(true);
+        org.mockito.Mockito.doThrow(new com.flarefitness.backend.exception.BadRequestException("Invalid OTP"))
+                .when(emailOtpService).verifyOtp(EmailOtpService.PURPOSE_PROFILE_EMAIL, "destination@example.test", "654321");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> profileService.updateProfile("owner",
+                new UpdateProfileRequest("Owner", "destination@example.test", "", "654321", "correct")))
+                .isInstanceOf(com.flarefitness.backend.exception.BadRequestException.class);
+        verify(userRepository, never()).save(any());
+        org.assertj.core.api.Assertions.assertThat(user.getEmail()).isEqualTo("owner@example.test");
+    }
+
+    @Test void validFreshPasswordAndDestinationOtpPermitEmailChange() {
+        User user = new User(); user.setId("owner"); user.setUsername("owner");
+        user.setEmail("owner@example.test"); user.setRole("Admin");
+        when(userRepository.findByUsernameIgnoreCaseForUpdate("owner")).thenReturn(Optional.of(user));
+        when(authService.passwordMatches("correct", user)).thenReturn(true);
+        profileService.updateProfile("owner", new UpdateProfileRequest("Owner", "destination@example.test", "", "654321", "correct"));
+        var order = org.mockito.Mockito.inOrder(authService, emailOtpService, userRepository);
+        order.verify(authService).passwordMatches("correct", user);
+        order.verify(emailOtpService).verifyOtp(EmailOtpService.PURPOSE_PROFILE_EMAIL, "destination@example.test", "654321");
+        order.verify(userRepository).save(user);
+        org.assertj.core.api.Assertions.assertThat(user.getEmail()).isEqualTo("destination@example.test");
+    }
+
     @Test void destinationEmailOtpCannotReplaceCurrentAccountActionConfirmation() {
         User user = new User(); user.setId("user-a"); user.setUsername("customer-a");
         user.setEmail("owner@example.test");
