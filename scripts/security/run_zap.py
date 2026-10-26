@@ -15,7 +15,21 @@ from ci_scope import require_ci_scope
 
 IMAGE = 'ghcr.io/zaproxy/zaproxy:stable@sha256:5ccfff9a411743ab2615136a2edd7416bec9ce41572fa94e935df38c14adb2b6'
 BASE = 'https://app.soc.test:8443'
-CONTROL = 'http://127.0.0.1:8092'
+# Control stays inside the scanner namespace: internal networks deliberately do not publish host ports.
+CONTROL_SCRIPT = """
+import json, sys, urllib.parse, urllib.request
+try:
+    data = json.load(sys.stdin)
+    url = 'http://127.0.0.1:8080/JSON/' + data['component'] + '/' + data['action'] + '/?'
+    url += urllib.parse.urlencode(data['parameters'])
+    client = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with client.open(url, timeout=15) as response:
+        body = response.read(8*1024*1024+1)
+    if len(body) > 8*1024*1024: raise ValueError('Response bound exceeded')
+    print(json.dumps(json.loads(body)))
+except Exception:
+    sys.exit('Scanner control request failed; details withheld')
+"""
 
 
 def bounded_json(client, url, *, data=None, headers=None):
@@ -78,12 +92,17 @@ def main():
     output.mkdir(mode=0o700, exist_ok=True)
     api_key = secrets.token_hex(32)
     name = project + '-zap'
-    network = project + '_flare-internal'
-    client = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-
+    network = project + '_asvs-scanner'
     def api(component, action, **parameters):
-        query = urllib.parse.urlencode({'apikey': api_key, **parameters})
-        result = bounded_json(client, CONTROL + '/JSON/' + component + '/' + action + '/?' + query)
+        payload = json.dumps({'component': component, 'action': action,
+                              'parameters': {'apikey': api_key, **parameters}}).encode()
+        try:
+            response = subprocess.run(['docker', 'exec', '-i', name, 'python3', '-c', CONTROL_SCRIPT],
+                                      input=payload, capture_output=True, timeout=20)
+            if response.returncode: raise RuntimeError('Scanner control is unavailable')
+            result = json.loads(response.stdout)
+        except (subprocess.TimeoutExpired, ValueError):
+            raise RuntimeError('Scanner control failed; details withheld to protect session data') from None
         if isinstance(result, dict) and 'code' in result:
             raise RuntimeError('Scanner control rejected a required setting')
         return result
@@ -97,7 +116,7 @@ def main():
     subprocess.run(['docker', 'pull', IMAGE], check=True, stdout=subprocess.DEVNULL)
     started = subprocess.run(['docker', 'run', '-d', '--name', name, '--network', network,
         '--memory', '2g', '--cpus', '2', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges:true',
-        '-p', '127.0.0.1:8092:8080', '-e', 'JAVA_OPTS=-Xmx1024m', IMAGE,
+        '-e', 'JAVA_OPTS=-Xmx1024m', IMAGE,
         'zap.sh', '-daemon', '-host', '0.0.0.0', '-port', '8080',
         '-config', 'api.key=' + api_key, '-config', 'api.addrs.addr.name=.*',
         '-config', 'api.addrs.addr.regex=true', '-config', 'autoupdate.checkOnStart=false'], capture_output=True)

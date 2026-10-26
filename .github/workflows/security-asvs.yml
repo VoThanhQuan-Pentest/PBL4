@@ -73,8 +73,14 @@ jobs:
           echo "ASVS_TLS_DIR=$RUNNER_TEMP/asvs-tls" >> "$GITHUB_ENV"
       - name: Install the locked browser toolchain and local CA utilities
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libnss3-tools
+          # Keep the same signed Ubuntu packages; avoid the slow Azure HTTP font mirror.
+          for source in /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources; do
+            if [ -f "$source" ]; then
+              sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' "$source"
+            fi
+          done
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::https::Timeout=20 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::https::Timeout=20 install -y --no-install-recommends libnss3-tools
           npm --prefix frontend ci --ignore-scripts
           cd frontend
           npx playwright install --with-deps chromium

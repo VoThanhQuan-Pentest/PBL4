@@ -32,8 +32,9 @@ services:
     mem_limit: 128m
     cpus: '0.5'
     networks:
-      flare-internal:
+      flare-internal: {}
+      asvs-scanner:
         aliases: [app.soc.test, attacker.test]
 networks:
-  flare-internal:
+  asvs-scanner:
     internal: true
