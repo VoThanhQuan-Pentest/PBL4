@@ -571,18 +571,18 @@ jobs:
     name: Isolated release rollback and one-hour runtime gate
     if: >-
       always() && github.event_name == 'workflow_dispatch' && inputs.runtime_validation == true
-      && needs["frontend"].result == 'success'
-      && needs["backend"].result == 'success'
-      && needs["desktop-client"].result == 'success'
-      && needs["prevention-gateway"].result == 'success'
-      && needs["ueba-worker"].result == 'success'
-      && needs["dependency-audit"].result == 'success'
-      && needs["edge-security"].result == 'success'
-      && needs["observability-config"].result == 'success'
-      && needs["terraform"].result == 'success'
+      && needs['frontend'].result == 'success'
+      && needs['backend'].result == 'success'
+      && needs['desktop-client'].result == 'success'
+      && needs['prevention-gateway'].result == 'success'
+      && needs['ueba-worker'].result == 'success'
+      && needs['dependency-audit'].result == 'success'
+      && needs['edge-security'].result == 'success'
+      && needs['observability-config'].result == 'success'
+      && needs['terraform'].result == 'success'
       && needs["e2e"].result == 'success'
-      && needs["supply-chain"].result == 'success'
-      && (inputs.asvs_validation != true || needs.asvs-security.result == 'success')
+      && needs['supply-chain'].result == 'success'
+      && (inputs.asvs_validation != true || needs['asvs-security'].result == 'success')
     needs: [frontend, backend, desktop-client, prevention-gateway, ueba-worker, dependency-audit, edge-security, observability-config, terraform, e2e, supply-chain, asvs-security]
     runs-on: ubuntu-24.04
     timeout-minutes: 120
