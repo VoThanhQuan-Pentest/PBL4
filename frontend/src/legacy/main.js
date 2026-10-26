@@ -18,6 +18,12 @@ import {
 } from '../core/browser-cache.js';
 
 document.addEventListener('DOMContentLoaded', () => {
+    let lastTrustedInteraction = 0;
+    for (const eventName of ['pointerdown', 'keydown', 'wheel', 'touchstart']) {
+        document.addEventListener(eventName, event => {
+            if (event.isTrusted) lastTrustedInteraction = Date.now();
+        }, { capture: true, passive: true });
+    }
     const HOME_SHOWCASE_ROTATION_MS = 3000;
     const PROMO_BANNER_ROTATION_MS = 3000;
     const PROMO_BANNER_ASSET_VERSION = '20260609-1';
@@ -4713,6 +4719,15 @@ document.addEventListener('DOMContentLoaded', () => {
         const headers = {
             'Content-Type': 'application/json'
         };
+        // Passive refreshes do not keep an unattended authenticated session alive.
+        const refreshActivityHeader = () => {
+            const interactionAge = Date.now() - lastTrustedInteraction;
+            if (auth && lastTrustedInteraction > 0 && interactionAge >= 0 && interactionAge <= 30000) {
+                headers['X-User-Activity'] = '1';
+            } else {
+                delete headers['X-User-Activity'];
+            }
+        };
 
         if (unsafeMethod) {
             try {
@@ -4730,6 +4745,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         let response;
         try {
+            refreshActivityHeader();
             response = await fetch(`${API_BASE}${path}`, {
                 method,
                 headers,
@@ -4766,6 +4782,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 assertAuthContextCurrent(requestAuthContext);
             }
             try {
+                refreshActivityHeader();
                 response = await fetch(`${API_BASE}${path}`, {
                     method,
                     headers,

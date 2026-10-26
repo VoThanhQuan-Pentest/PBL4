@@ -34,3 +34,5 @@ class TopologyTest(unittest.TestCase):
             self.assertTrue(any(p['host_ip'] == '127.0.0.1' and str(p['published']) == str(port) for p in ports))
         self.assertTrue(config['services']['tls-edge']['read_only'])
         self.assertEqual('true', config['services']['app']['environment']['APP_LOGIN_OTP_ENABLED'])
+        self.assertEqual('900', config['services']['app']['environment']['APP_SESSION_IDLE_SECONDS'])
+        self.assertEqual('28800', config['services']['app']['environment']['APP_JWT_EXPIRATION_SECONDS'])

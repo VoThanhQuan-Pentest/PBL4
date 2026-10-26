@@ -1078,6 +1078,7 @@ public class DashboardController {
                 incidentDetail=new VBox(12);incidentDetail.getStyleClass().add("detail-panel");
                 incidentDetail.setMinHeight(0);incidentDetail.setFillWidth(true);
                 Scene scene=new Scene(incidentDetail);scene.getStylesheets().add(FlareSecurityApp.class.getResource("/css/siem.css").toExternalForm());
+                com.flarefitness.monitor.ui.SessionActivity.attach(incidentDetail, api);
                 incidentStage.setScene(scene);
                 var screens=javafx.stage.Screen.getScreensForRectangle(contentHost.getScene().getWindow().getX(),contentHost.getScene().getWindow().getY(),1,1);
                 var bounds=(screens.isEmpty()?javafx.stage.Screen.getPrimary():screens.getFirst()).getVisualBounds();

@@ -47,6 +47,28 @@ class SiemApiClientTest {
         assertEquals(2, client.overview().get(3, TimeUnit.SECONDS).openIncidents());
     }
 
+    @Test void passiveRequestsStopRenewingIdleUntilAnotherUserInteraction() throws Exception {
+        var clock = new java.util.concurrent.atomic.AtomicLong(0L);
+        var marker = new AtomicReference<String>();
+        server.createContext("/api/siem/status", exchange -> {
+            marker.set(exchange.getRequestHeaders().getFirst("X-User-Activity"));
+            respond(exchange, 200, "{\"elasticsearch_available\":true}", null);
+        });
+        var client = new SiemApiClient(baseUrl, clock::get);
+        client.login("analyst", "secret").get(3, TimeUnit.SECONDS);
+        client.status().get(3, TimeUnit.SECONDS);
+        assertEquals("1", marker.get());
+        clock.set(TimeUnit.SECONDS.toNanos(31));
+        client.status().get(3, TimeUnit.SECONDS);
+        assertEquals(null, marker.get());
+        client.recordUserActivity();
+        client.status().get(3, TimeUnit.SECONDS);
+        assertEquals("1", marker.get());
+        client.clearSession();
+        client.status().get(3, TimeUnit.SECONDS);
+        assertEquals(null, marker.get());
+    }
+
     @Test
     void readsLimitedPolicyAndSubmitsVersionedReviewsWithAuthenticatedCsrf() throws Exception {
         server.createContext("/api/siem/postlogin-policy",exchange -> respond(exchange,200,

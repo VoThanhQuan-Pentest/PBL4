@@ -50,6 +50,17 @@ lần sai trong 300 giây theo tài khoản, yêu cầu mã mới cách nhau 60 
 mã mới, quay lại bước mật khẩu; không lưu mật khẩu, mã hoặc challenge trên disk.
 Tài khoản thiếu email phải được xử lý qua quy trình quản trị hiện có.
 
+Profile candidate HTTPS đặt `APP_SESSION_IDLE_SECONDS=900` và
+`APP_JWT_EXPIRATION_SECONDS=28800`: phiên cần đăng nhập lại sau 15 phút không
+có yêu cầu gắn tương tác gần đây, hoặc sau tối đa 8 giờ. Web chỉ gắn
+`X-User-Activity: 1` khi có click/phím/scroll/touch thật trong 30 giây gần nhất;
+JavaFX theo dõi tương tác ở cả cửa sổ chính và incident. Marker này chỉ làm mới
+idle của phiên còn hiệu lực, không phải bằng chứng xác thực, không hồi sinh
+phiên đã hết hạn/thu hồi và không tăng thời hạn tuyệt đối. Refresh nền tự nó
+không gia hạn. Redis dùng thêm một key nhỏ cho mỗi phiên. Bật timeout yêu cầu
+các phiên cũ đăng nhập lại; mặc định local `APP_SESSION_IDLE_SECONDS=0` giữ
+chế độ tương thích và không được tính là đã đạt kiểm soát inactivity của ASVS.
+
 OTP email cho đăng ký, khôi phục, đổi email và xác nhận thao tác được lưu bằng
 hash có salt, dùng cùng encoder của ứng dụng. Redis chỉ nhận hash và kết quả
 đối chiếu; Lua kiểm tra lại đúng phiên bản hash trước khi tiêu thụ mã để tránh

@@ -35,9 +35,18 @@ public class SiemApiClient {
             .enable(com.fasterxml.jackson.databind.DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
             .setNodeFactory(com.fasterxml.jackson.databind.node.JsonNodeFactory.withExactBigDecimals(true));
     private volatile String csrfToken;
+    private final java.util.function.LongSupplier activityClock;
+    private volatile long lastUserActivity = Long.MIN_VALUE;
+    public void recordUserActivity() { lastUserActivity = activityClock.getAsLong(); }
+    private boolean recentUserActivity() {
+        long last = lastUserActivity;
+        if (last == Long.MIN_VALUE) return false;
+        long age = activityClock.getAsLong() - last;
+        return age >= 0 && age <= java.util.concurrent.TimeUnit.SECONDS.toNanos(30);
+    }
     private Runnable onSessionExpired=()->{};
     public void setOnSessionExpired(Runnable callback) { onSessionExpired=callback; }
-    public void clearSession() { cookies.getCookieStore().removeAll();csrfToken=null; }
+    public void clearSession() { cookies.getCookieStore().removeAll();csrfToken=null;lastUserActivity=Long.MIN_VALUE; }
     public static String configuredOrigin() {
         String property=System.getProperty("flare.soc.serverOrigin");
         if(property!=null && !property.isBlank()) return property;
@@ -114,7 +123,10 @@ public class SiemApiClient {
         return post("/api/siem/prevention/blocks/"+encode(block.id())+"/revoke",Map.of("expected_version",block.version(),"reason",reason,"outcome",outcome,"request_id",requestId),SiemModels.IpBlock.class);
     }
 
-    public SiemApiClient(String baseUrl) {
+    public SiemApiClient(String baseUrl) { this(baseUrl, System::nanoTime); }
+
+    SiemApiClient(String baseUrl, java.util.function.LongSupplier activityClock) {
+        this.activityClock = java.util.Objects.requireNonNull(activityClock);
         String normalized = baseUrl == null ? "" : baseUrl.trim().replaceAll("/+$", "");
         URI candidate;
         try {
@@ -151,6 +163,7 @@ public class SiemApiClient {
                         return CompletableFuture.completedFuture(new SiemModels.LoginAttempt(null, challenge));
                     }
                     var session = read(response.body(), SiemModels.LoginResponse.class);
+                    recordUserActivity();
                     return refreshCsrf().thenApply(ignored -> new SiemModels.LoginAttempt(session, null));
                 });
     }
@@ -164,7 +177,10 @@ public class SiemApiClient {
 
     public CompletableFuture<SiemModels.LoginResponse> verifyLoginOtp(String challengeId, String otpCode) {
         return post("/api/auth/login/otp", Map.of("challenge_id", challengeId, "otp_code", otpCode), SiemModels.LoginResponse.class)
-                .thenCompose(response -> refreshCsrf().thenApply(ignored -> response));
+                .thenCompose(response -> {
+                    recordUserActivity();
+                    return refreshCsrf().thenApply(ignored -> response);
+                });
     }
 
     /** Revoke the server session, then discard all local cookies even if the request fails. */
@@ -173,8 +189,7 @@ public class SiemApiClient {
                 .thenCompose(ignored -> raw("POST", "/api/auth/logout", null, true))
                 .thenAccept(ignored -> { })
                 .whenComplete((ignored, failure) -> {
-                    cookies.getCookieStore().removeAll();
-                    csrfToken = null;
+                    clearSession();
                 });
     }
 
@@ -546,6 +561,7 @@ public class SiemApiClient {
                 .timeout(Duration.ofSeconds(12))
                 .header("Accept", "application/json");
         if (csrf && csrfToken != null) builder.header("X-XSRF-TOKEN", csrfToken);
+        if (recentUserActivity()) builder.header("X-User-Activity", "1");
         if (body == null) {
             builder.method(method, HttpRequest.BodyPublishers.noBody());
         } else {

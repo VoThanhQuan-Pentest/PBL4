@@ -56,6 +56,7 @@ public class FlareSecurityApp extends Application {
             Parent root = loader.load();
             DashboardController controller = loader.getController();
             controller.initializeSession(apiClient, user);
+            com.flarefitness.monitor.ui.SessionActivity.attach(root, apiClient);
             primaryStage.setResizable(true);primaryStage.setMinWidth(1000);primaryStage.setMinHeight(680);
             primaryStage.setOnCloseRequest(event -> controller.dispose());
             setScene(root, 1440, 900);
