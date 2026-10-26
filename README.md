@@ -50,6 +50,17 @@ lần sai trong 300 giây theo tài khoản, yêu cầu mã mới cách nhau 60 
 mã mới, quay lại bước mật khẩu; không lưu mật khẩu, mã hoặc challenge trên disk.
 Tài khoản thiếu email phải được xử lý qua quy trình quản trị hiện có.
 
+Chính sách mật khẩu mới dùng chung cho đăng ký, đổi/khôi phục và quản trị tạo/
+đổi mật khẩu: 12–128 ký tự Unicode, cho phép passphrase và giữ nguyên khoảng
+trắng/chữ hoa thường. Tài khoản đang có vẫn đăng nhập bằng mật khẩu hiện tại;
+không reset hay bắt đổi mật khẩu định kỳ. Backend kiểm tra offline bằng 46.640
+hash của mật khẩu phổ biến/đã xuất hiện trong corpus công khai, cùng danh sách
+ngữ cảnh `flarefitness`, `flaresoc`, `pbl4`, `socdemo`, `socpractice`,
+`securitymonitor` và biến thể phân cách/chữ hoa/leet cơ bản. Đây là tập hữu hạn,
+không bảo đảm phát hiện mọi mật khẩu từng bị lộ. Dữ liệu nhị phân khoảng 1,42 MiB,
+RAM tăng khoảng 1,5–2 MiB; không có truy vấn mạng theo mật khẩu người dùng.
+Nguồn, digest và giấy phép được lưu trong `security/passwords/`.
+
 Workflow CI có tùy chọn `asvs_validation`: kiểm tra API trên MySQL/Redis riêng,
 trình duyệt qua HTTPS có CA tin cậy, DAST giới hạn và pipeline ELK. Chỉ có runner
 GitHub được phép khởi tạo project này; báo cáo chi tiết được mã hóa bằng public

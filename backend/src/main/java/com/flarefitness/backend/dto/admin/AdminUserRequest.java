@@ -21,11 +21,7 @@ public record AdminUserRequest(
         String sdt,
         String role,
         String status,
-        @Pattern(
-                regexp = "^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[^A-Za-z\\d]).{8,255}$",
-                message = "Mat khau phai co it nhat 8 ky tu, chu hoa, chu thuong, chu so va ky tu dac biet."
-        )
-        @Size(max = 255, message = "Mat khau khong duoc vuot qua 255 ky tu.")
+        @Size(max = 256, message = "Mat khau khong duoc vuot qua 128 ky tu Unicode.")
         String password
 ) {
 }

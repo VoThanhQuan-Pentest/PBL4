@@ -42,6 +42,7 @@ class AdminServiceTest {
                 customerRepository,
                 orderRepository,
                 passwordEncoder,
+                new com.flarefitness.backend.security.PasswordPolicy(),
                 phoneNumberService,
                 redisTokenStore,
                 auditLogService);

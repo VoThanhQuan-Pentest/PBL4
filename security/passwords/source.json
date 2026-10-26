@@ -1,0 +1,25 @@
+{
+  "revision": "fd02038d8b47e2f9d28d75ab3719f5ecf7f2d571",
+  "sources": [
+    {
+      "name": "xato",
+      "url": "https://raw.githubusercontent.com/danielmiessler/SecLists/fd02038d8b47e2f9d28d75ab3719f5ecf7f2d571/Passwords/Common-Credentials/xato-net-10-million-passwords-1000000.txt",
+      "sha256": "424a3e03a17df0a2bc2b3ca749d81b04e79d59cb7aeec8876a5a3f308d0caf51",
+      "input_bytes": 8557632,
+      "eligible_entries": 46296
+    },
+    {
+      "name": "rockyou",
+      "url": "https://raw.githubusercontent.com/danielmiessler/SecLists/fd02038d8b47e2f9d28d75ab3719f5ecf7f2d571/Passwords/Leaked-Databases/rockyou-75.txt",
+      "sha256": "d36811f6d5c8dd78c52738efa730689422ac2a9a0ea28255928ae16fbbbcb83d",
+      "input_bytes": 478936,
+      "eligible_entries": 627
+    }
+  ],
+  "license": "MIT (SecLists)",
+  "format": "Sorted distinct SHA-256 digests, 32 bytes per record, unsigned lexicographic order; UTF-8 exact input",
+  "selection": "12..128 Unicode code points, valid UTF-8 nonblank lines; no case folding or input trimming",
+  "entries": 46640,
+  "bytes": 1492480,
+  "sha256": "a1e2a00500808fa829c5bb1f5ac7583be48234d8c06d4a2cd014b95f424ba865"
+}

@@ -23,10 +23,10 @@ public record RegisterRequest(
         )
         String sdt,
         @NotBlank(message = "Mật khẩu là bắt buộc.")
-        @Size(min = 12, max = 128, message = "Mật khẩu phải có từ 12 đến 128 ký tự.")
+        @Size(min = 12, max = 256, message = "Mật khẩu phải có từ 12 đến 128 ký tự.")
         String password,
         @NotBlank(message = "Xác nhận mật khẩu là bắt buộc.")
-        @Size(max = 128, message = "Xác nhận mật khẩu không được vượt quá 128 ký tự.")
+        @Size(max = 256, message = "Xác nhận mật khẩu không được vượt quá 128 ký tự.")
         String confirmPassword,
         @NotBlank(message = "Mã OTP là bắt buộc.")
         @Size(min = 6, max = 6, message = "Mã OTP phải gồm 6 chữ số.")

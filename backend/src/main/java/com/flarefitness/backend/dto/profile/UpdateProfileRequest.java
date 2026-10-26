@@ -17,7 +17,7 @@ public record UpdateProfileRequest(
         )
         String sdt,
         String otpCode,
-        @Size(max = 128, message = "Mật khẩu không được vượt quá 128 ký tự.")
+        @Size(max = 256, message = "Mật khẩu không được vượt quá 128 ký tự.")
         String currentPassword
 ) {
     public UpdateProfileRequest(String hoTen, String email, String sdt, String otpCode) {

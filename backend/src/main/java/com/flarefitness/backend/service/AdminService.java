@@ -45,6 +45,7 @@ public class AdminService {
     private final CustomerRepository customerRepository;
     private final OrderRepository orderRepository;
     private final PasswordEncoder passwordEncoder;
+    private final com.flarefitness.backend.security.PasswordPolicy passwordPolicy;
     private final PhoneNumberService phoneNumberService;
     private final com.flarefitness.backend.security.RedisTokenStore redisTokenStore;
     private final AuditLogService auditLogService;
@@ -54,6 +55,7 @@ public class AdminService {
             CustomerRepository customerRepository,
             OrderRepository orderRepository,
             PasswordEncoder passwordEncoder,
+            com.flarefitness.backend.security.PasswordPolicy passwordPolicy,
             PhoneNumberService phoneNumberService,
             com.flarefitness.backend.security.RedisTokenStore redisTokenStore,
             AuditLogService auditLogService
@@ -62,6 +64,7 @@ public class AdminService {
         this.customerRepository = customerRepository;
         this.orderRepository = orderRepository;
         this.passwordEncoder = passwordEncoder;
+        this.passwordPolicy = passwordPolicy;
         this.phoneNumberService = phoneNumberService;
         this.redisTokenStore = redisTokenStore;
         this.auditLogService = auditLogService;
@@ -93,7 +96,8 @@ public class AdminService {
         String username = requireText(request.username(), "Username la bat buoc.");
         String hoTen = requireText(request.hoTen(), "Ho ten la bat buoc.");
         String email = trimToNull(request.email());
-        String rawPassword = requireText(request.password(), "Mat khau la bat buoc khi tao tai khoan.");
+        String rawPassword = request.password();
+        passwordPolicy.validateNewPassword(rawPassword);
         String role = normalizeRole(request.role());
         String status = normalizeStatus(request.status());
         String phoneNumber = ROLE_CUSTOMER.equals(role)
@@ -153,6 +157,8 @@ public class AdminService {
             throw new BadRequestException("Khong duoc tu ha quyen hoac khoa tai khoan dang dang nhap.");
         }
 
+        String rawPassword = request.password() == null || request.password().isEmpty() ? null : request.password();
+        if (rawPassword != null) passwordPolicy.validateNewPassword(rawPassword);
         user.setUsername(username);
         user.setRole(role);
         user.setHoTen(hoTen);
@@ -160,7 +166,6 @@ public class AdminService {
         boolean recoveryContactChanged = !(previousEmail == null ? "" : previousEmail.trim())
                 .equalsIgnoreCase(email == null ? "" : email.trim());
         user.setStatus(status);
-        String rawPassword = trimToNull(request.password());
         if (rawPassword != null) {
             user.setPassword(passwordEncoder.encode(rawPassword));
         }

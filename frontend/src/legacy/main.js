@@ -5260,7 +5260,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function isStrongPassword(password) {
         const value = String(password || '');
-        return value.length >= 12 && value.length <= 128;
+        return Array.from(value).length >= 12 && Array.from(value).length <= 128;
     }
 
     function normalizePhoneInput(value) {
@@ -16492,7 +16492,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const existingAccountId = document.getElementById('account-id').value.trim();
         const existingAccount = getManagedAccounts().find(account => String(account.id) === existingAccountId);
         const nextCreatedAt = document.getElementById('account-created-at').value.trim() || existingAccount?.createdAt || new Date().toISOString();
-        const password = document.getElementById('account-password')?.value.trim() || '';
+        const password = document.getElementById('account-password')?.value || '';
         const payload = normalizeAccountRecord({
             id: existingAccountId || generateManagedAccountId(selectedRole),
             ho_ten: document.getElementById('account-name').value.trim(),
