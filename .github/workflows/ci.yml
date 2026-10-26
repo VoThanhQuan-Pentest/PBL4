@@ -580,7 +580,7 @@ jobs:
       && needs['edge-security'].result == 'success'
       && needs['observability-config'].result == 'success'
       && needs['terraform'].result == 'success'
-      && needs["e2e"].result == 'success'
+      && needs['e2e'].result == 'success'
       && needs['supply-chain'].result == 'success'
       && (inputs.asvs_validation != true || needs['asvs-security'].result == 'success')
     needs: [frontend, backend, desktop-client, prevention-gateway, ueba-worker, dependency-audit, edge-security, observability-config, terraform, e2e, supply-chain, asvs-security]
