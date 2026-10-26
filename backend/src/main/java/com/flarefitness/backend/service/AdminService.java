@@ -125,11 +125,12 @@ public class AdminService {
 
     @Transactional
     public AdminUserResponse updateUser(String id, AdminUserRequest request, Authentication authentication) {
-        User user = userRepository.findActiveById(id)
+        User user = userRepository.findActiveByIdForUpdate(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Khong tim thay tai khoan."));
         String previousUsername = user.getUsername();
         String previousRole = user.getRole();
         String previousStatus = user.getStatus();
+        String previousEmail = user.getEmail();
         String currentAdminId = currentAdmin(authentication).getId();
 
         String username = requireText(request.username(), "Username la bat buoc.");
@@ -156,20 +157,22 @@ public class AdminService {
         user.setRole(role);
         user.setHoTen(hoTen);
         user.setEmail(email);
+        boolean recoveryContactChanged = !(previousEmail == null ? "" : previousEmail.trim())
+                .equalsIgnoreCase(email == null ? "" : email.trim());
         user.setStatus(status);
         String rawPassword = trimToNull(request.password());
         if (rawPassword != null) {
             user.setPassword(passwordEncoder.encode(rawPassword));
         }
 
-        if (rawPassword != null || isInactiveStatus(status)
+        if (rawPassword != null || recoveryContactChanged || isInactiveStatus(status)
                 || !previousUsername.equalsIgnoreCase(user.getUsername())
                 || !String.valueOf(previousRole).equalsIgnoreCase(user.getRole())) {
             user.setAuthVersion((user.getAuthVersion() == null ? 0L : user.getAuthVersion()) + 1L);
         }
 
         userRepository.save(user);
-        if (rawPassword != null
+        if (rawPassword != null || recoveryContactChanged
                 || isInactiveStatus(status)
                 || !previousUsername.equalsIgnoreCase(user.getUsername())
                 || !String.valueOf(previousRole).equalsIgnoreCase(user.getRole())) {
@@ -192,7 +195,7 @@ public class AdminService {
 
     @Transactional
     public void deleteUser(String id, boolean deleteRelated, Authentication authentication) {
-        User user = userRepository.findActiveById(id)
+        User user = userRepository.findActiveByIdForUpdate(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Khong tim thay tai khoan."));
         String previousUsername = user.getUsername();
         if (user.getId().equals(currentAdmin(authentication).getId())) {

@@ -58,6 +58,23 @@ class EmailOtpScopedProofTest {
                 "test:otp:attempt:LAB_ACTION_PROOF:" + scope + ":owner@example.test",
                 "test:otp:cooldown:LAB_ACTION_PROOF:owner@example.test")), eq("123456"), eq("5"), eq("300"));
     }
+    @Test void recoveryCodesUseServerIdentityScopeButKeepTheMailboxCooldown() {
+        writable();
+        var owner = new com.flarefitness.backend.entity.User(); owner.setId("account-a"); owner.setEmail("owner@example.test");
+        String issuedScope = com.flarefitness.backend.security.PasswordResetTokenStore.recoveryScope(owner);
+        service.sendRecoveryOtp(owner);
+        verify(values).set(eq("test:otp:FORGOT_PASSWORD:" + issuedScope + ":owner@example.test"), anyString(), eq(Duration.ofSeconds(300)));
+        verify(values).setIfAbsent("test:otp:cooldown:FORGOT_PASSWORD:owner@example.test", "1", Duration.ofSeconds(60));
+        owner.setId("account-b");
+        String newScope = com.flarefitness.backend.security.PasswordResetTokenStore.recoveryScope(owner);
+        assertThat(newScope).isNotEqualTo(issuedScope);
+        doReturn(0L).when(redis).execute(any(), anyList(), any(), any(), any());
+        assertThatThrownBy(() -> service.verifyRecoveryOtp(owner, "123456")).isInstanceOf(BadRequestException.class);
+        verify(redis).execute(any(), eq(List.of("test:otp:FORGOT_PASSWORD:" + newScope + ":owner@example.test",
+                "test:otp:attempt:FORGOT_PASSWORD:" + newScope + ":owner@example.test",
+                "test:otp:cooldown:FORGOT_PASSWORD:owner@example.test")), eq("123456"), eq("5"), eq("300"));
+    }
+
     @Test void malformedScopesAreRejectedBeforeMailOrRedis() {
         assertThatThrownBy(() -> service.sendLabActionProofOtp("owner@example.test", "client-chosen"))
                 .isInstanceOf(BadRequestException.class);

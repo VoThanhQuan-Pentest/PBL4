@@ -32,5 +32,5 @@ jobs:
         working-directory: backend
         run: >-
           mvn -B -ntp
-          -Dtest=AsvsAuthorizationIntegrationTest,ProfileServiceTest,AuthServiceTest,PasswordResetTokenStoreTest,SensitiveActionConfirmationServiceTest,SiemSecurityIntegrationTest,SocWorkflowMatrixIntegrationTest,SiemContainmentIntegrationTest,SocSessionResponseIntegrationTest,SensitiveActionConfirmationIntegrationTest,ProductionSecurityConfigurationValidatorTest
+          -Dtest=AsvsAuthorizationIntegrationTest,AsvsRecoveryIdentityIntegrationTest,AdminServiceTest,EmailOtpScopedProofTest,ProfileServiceTest,AuthServiceTest,PasswordResetTokenStoreTest,SensitiveActionConfirmationServiceTest,SiemSecurityIntegrationTest,SocWorkflowMatrixIntegrationTest,SiemContainmentIntegrationTest,SocSessionResponseIntegrationTest,SensitiveActionConfirmationIntegrationTest,ProductionSecurityConfigurationValidatorTest
           test

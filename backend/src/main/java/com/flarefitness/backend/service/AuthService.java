@@ -234,7 +234,7 @@ public class AuthService {
 
         User user = foundUser.get();
         try {
-            emailOtpService.sendOtp(EmailOtpService.PURPOSE_FORGOT_PASSWORD, email);
+            emailOtpService.sendRecoveryOtp(user);
             auditLogService.success("AUTH_PASSWORD_RESET_OTP_REQUEST", null, user.getId(), "USER", user.getId());
         } catch (TooManyRequestsException exception) {
             // EmailOtpService's cooldown exists only for real accounts because
@@ -261,7 +261,7 @@ public class AuthService {
         String email = request.email().trim();
         User user = userRepository.findByEmailIgnoreCaseForUpdate(email)
                 .orElseThrow(() -> new BadRequestException("Ma OTP khong dung hoac da het han."));
-        emailOtpService.verifyOtp(EmailOtpService.PURPOSE_FORGOT_PASSWORD, email, request.otpCode());
+        emailOtpService.verifyRecoveryOtp(user, request.otpCode());
         return new PasswordResetVerificationResponse(passwordResetTokenStore.issue(user));
     }
 
@@ -349,8 +349,12 @@ public class AuthService {
                 return false;
             }
             if (passwordEncoder.upgradeEncoding(storedPassword)) {
-                user.setPassword(passwordEncoder.encode(rawPassword));
-                userRepository.save(user);
+                String replacement = passwordEncoder.encode(rawPassword);
+                long version = user.getAuthVersion() == null ? 0L : user.getAuthVersion();
+                if (userRepository.upgradePasswordHash(user.getId(), storedPassword, version, replacement) != 1) {
+                    return false;
+                }
+                user.setPassword(replacement);
             }
             return true;
         } catch (IllegalArgumentException exception) {

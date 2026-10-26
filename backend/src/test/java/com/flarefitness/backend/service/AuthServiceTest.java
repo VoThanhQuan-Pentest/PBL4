@@ -157,6 +157,7 @@ class AuthServiceTest {
                 "missing@example.test",
                 "127.0.0.1");
         verify(emailOtpService, never()).sendOtp(any(), any());
+        verify(emailOtpService, never()).sendRecoveryOtp(any());
         verify(auditLogService).failure("AUTH_PASSWORD_RESET_OTP_REQUEST", null, null, "USER", null);
     }
 
@@ -168,11 +169,11 @@ class AuthServiceTest {
         when(userRepository.findByEmailIgnoreCase("member@example.test")).thenReturn(Optional.of(user));
         doThrow(new BadRequestException("SMTP credentials are not configured"))
                 .when(emailOtpService)
-                .sendOtp(EmailOtpService.PURPOSE_FORGOT_PASSWORD, "member@example.test");
+                .sendRecoveryOtp(user);
 
         authService.sendForgotPasswordOtp(new OtpRequest(null, "MEMBER@example.test", null), "127.0.0.1");
 
-        verify(emailOtpService).sendOtp(EmailOtpService.PURPOSE_FORGOT_PASSWORD, "member@example.test");
+        verify(emailOtpService).sendRecoveryOtp(user);
         verify(auditLogService).failure(
                 "AUTH_PASSWORD_RESET_OTP_REQUEST",
                 null,
@@ -188,7 +189,7 @@ class AuthServiceTest {
         when(userRepository.findByEmailIgnoreCase("member@example.test")).thenReturn(Optional.of(user));
         doThrow(new TooManyRequestsException("cooldown"))
                 .when(emailOtpService)
-                .sendOtp(eq(EmailOtpService.PURPOSE_FORGOT_PASSWORD), eq("member@example.test"));
+                .sendRecoveryOtp(user);
 
         authService.sendForgotPasswordOtp(new OtpRequest(null, "member@example.test", null), "127.0.0.1");
 
@@ -232,15 +233,33 @@ class AuthServiceTest {
         when(passwordEncoder.matches("ValidPassword1!", user.getPassword())).thenReturn(true);
         when(passwordEncoder.upgradeEncoding(user.getPassword())).thenReturn(true);
         when(passwordEncoder.encode("ValidPassword1!")).thenReturn("$2a$12$new-hash");
+        when(userRepository.upgradePasswordHash("user-1", "$2a$10$stored-hash", 0L, "$2a$12$new-hash")).thenReturn(1);
         when(jwtTokenService.generateToken(any())).thenReturn("test-token");
         when(jwtTokenService.getExpirationSeconds()).thenReturn(3600L);
 
         authService.login(new LoginRequest("rehash-user", "ValidPassword1!"), "127.0.0.1");
 
         org.assertj.core.api.Assertions.assertThat(user.getPassword()).isEqualTo("$2a$12$new-hash");
-        verify(userRepository).save(user);
+        verify(userRepository).upgradePasswordHash("user-1", "$2a$10$stored-hash", 0L, "$2a$12$new-hash");
+        verify(userRepository, never()).save(any());
         verify(ipRateLimitService).recordSuccessfulLogin("127.0.0.1", "rehash-user");
         verify(auditLogService).success("AUTH_LOGIN", "user-1", "user-1", "USER", "user-1");
+    }
+
+    @Test
+    void staleLoginHashMigrationCannotOverwriteAConcurrentPasswordReset() {
+        User user = new User(); user.setId("old-user"); user.setUsername("old-user");
+        user.setPassword("$2a$10$old-hash");
+        when(userRepository.findByUsernameIgnoreCase("old-user")).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches("ValidPassword1!", "$2a$10$old-hash")).thenReturn(true);
+        when(passwordEncoder.upgradeEncoding("$2a$10$old-hash")).thenReturn(true);
+        when(passwordEncoder.encode("ValidPassword1!")).thenReturn("$2a$12$replacement");
+        // The compare-and-set returns zero after the account security epoch changed.
+        when(userRepository.upgradePasswordHash("old-user", "$2a$10$old-hash", 0L, "$2a$12$replacement")).thenReturn(0);
+        assertThatThrownBy(() -> authService.login(new LoginRequest("old-user", "ValidPassword1!"), "127.0.0.1"))
+                .isInstanceOf(UnauthorizedException.class);
+        verify(userRepository, never()).save(any());
+        verify(jwtTokenService, never()).generateToken(any());
     }
 
     @Test

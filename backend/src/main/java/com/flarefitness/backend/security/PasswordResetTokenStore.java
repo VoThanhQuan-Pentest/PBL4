@@ -43,6 +43,11 @@ public class PasswordResetTokenStore {
     }
 
     private String binding(User user) {
+        return "v2:" + recoveryScope(user);
+    }
+
+    /** Server-authored identity shared by the OTP and its single-use reset grant. */
+    public static String recoveryScope(User user) {
         String id = user.getId();
         String email = normalizeEmail(user.getEmail());
         long version = user.getAuthVersion() == null ? 0L : user.getAuthVersion();
@@ -54,14 +59,14 @@ public class PasswordResetTokenStore {
                 user.getEmailVerifiedAt() == null ? "-" : user.getEmailVerifiedAt().toString())) {
             identity.append(field.length()).append(':').append(field);
         }
-        return "v2:" + TokenFingerprint.sha256(identity.toString());
+        return TokenFingerprint.sha256(identity.toString());
     }
 
     private String key(String token) {
         return tokenPrefix + TokenFingerprint.sha256(token);
     }
 
-    private String normalizeEmail(String email) {
+    private static String normalizeEmail(String email) {
         return String.valueOf(email == null ? "" : email).trim().toLowerCase(Locale.ROOT);
     }
 }

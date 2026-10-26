@@ -73,6 +73,21 @@ class AdminServiceTest {
         assertThat(response.hasNext()).isTrue();
     }
 
+    @Test
+    void administrativeEmailChangesAdvanceTheEpochAndRevokeSessionsUsingTheAccountLock() {
+        User target = user(); target.setAuthVersion(7L);
+        when(userRepository.findActiveByIdForUpdate(target.getId())).thenReturn(java.util.Optional.of(target));
+        User admin = user(); admin.setId("different-admin"); admin.setRole("Admin");
+        var principal = new com.flarefitness.backend.security.CurrentUserPrincipal(admin);
+        var actor = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities());
+        adminService.updateUser(target.getId(), new com.flarefitness.backend.dto.admin.AdminUserRequest(
+                target.getHoTen(), target.getUsername(), "new@example.test", "", target.getRole(), target.getStatus(), null), actor);
+        assertThat(target.getAuthVersion()).isEqualTo(8L);
+        verify(userRepository).findActiveByIdForUpdate(target.getId());
+        org.mockito.Mockito.verify(userRepository, org.mockito.Mockito.never()).findActiveById(target.getId());
+        verify(redisTokenStore, org.mockito.Mockito.atLeastOnce()).revokeAll(target.getUsername());
+    }
+
     private User user() {
         User user = new User();
         user.setId("user-1");

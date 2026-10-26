@@ -67,6 +67,17 @@ public interface UserRepository extends JpaRepository<User, String> {
     @Query("select u from User u where u.id = :id and u.deleted = false")
     Optional<User> findActiveByIdForUpdate(@Param("id") String id);
 
+    /** Hash migration must never merge a detached login snapshot over newer credentials. */
+    @Modifying
+    @org.springframework.transaction.annotation.Transactional
+    @Query(value = """
+            UPDATE tbl_nguoi_dung SET password=:replacement
+            WHERE id=:id AND BINARY password=BINARY :previous
+              AND auth_version=:authVersion AND is_deleted=0
+            """, nativeQuery = true)
+    int upgradePasswordHash(@Param("id") String id, @Param("previous") String previous,
+                            @Param("authVersion") long authVersion, @Param("replacement") String replacement);
+
     @Modifying
     @Query(value = """
             UPDATE tbl_tai_khoan_can_dat_lai_mat_khau

@@ -105,6 +105,16 @@ public class EmailOtpService {
         sendOtp(purpose, email, null);
     }
 
+    public void sendRecoveryOtp(com.flarefitness.backend.entity.User user) {
+        sendOtp(PURPOSE_FORGOT_PASSWORD, user.getEmail(),
+                com.flarefitness.backend.security.PasswordResetTokenStore.recoveryScope(user));
+    }
+
+    public void verifyRecoveryOtp(com.flarefitness.backend.entity.User user, String code) {
+        verifyOtp(PURPOSE_FORGOT_PASSWORD, user.getEmail(), code,
+                com.flarefitness.backend.security.PasswordResetTokenStore.recoveryScope(user));
+    }
+
     public long sensitiveActionTtlSeconds() { return Math.max(1L, Math.min(300L, ttlSeconds)); }
 
     public void sendSensitiveActionOtp(String email, String scope, String accountScope,
@@ -317,7 +327,8 @@ public class EmailOtpService {
 
     private String scopedPurpose(String purpose, String scope) {
         if (scope == null) return purpose;
-        if (!PURPOSE_LAB_ACTION_PROOF.equals(purpose) || !scope.matches("[0-9a-f]{64}")) {
+        if ((!PURPOSE_LAB_ACTION_PROOF.equals(purpose) && !PURPOSE_FORGOT_PASSWORD.equals(purpose))
+                || !scope.matches("[0-9a-f]{64}")) {
             throw new BadRequestException("Pham vi OTP khong hop le.");
         }
         return purpose + ":" + scope;
