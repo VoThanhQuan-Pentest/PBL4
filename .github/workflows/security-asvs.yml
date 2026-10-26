@@ -82,11 +82,17 @@ jobs:
         run: python3 scripts/security/prepare_ci_tls.py
       - name: Verify read-only TLS configuration before building the full stack
         run: |
+          cat > "$RUNNER_TEMP/asvs-tls-preflight.yml" <<'YAML'
+          services:
+            tls-edge:
+              extra_hosts:
+                gateway: "127.0.0.1"
+          YAML
           docker compose --env-file .env.e2e.example --project-name "$COMPOSE_PROJECT_NAME" --profile observability \
             -f docker-compose.yml -f docker-compose.e2e.yml \
             -f observability/docker-compose.monitor.yml -f observability/docker-compose.local.yml \
-            -f security/asvs/docker-compose.tls.yml run --rm --no-deps \
-            --add-host gateway:127.0.0.1 tls-edge -t -c /etc/nginx/asvs.conf
+            -f security/asvs/docker-compose.tls.yml -f "$RUNNER_TEMP/asvs-tls-preflight.yml" \
+            run --rm --no-deps tls-edge -t -c /etc/nginx/asvs.conf
       - name: Start the existing full-stack composition with ASVS resource limits
         run: |
           observability/scripts/local-lab.sh up
