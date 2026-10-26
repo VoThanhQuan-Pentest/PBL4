@@ -1,6 +1,7 @@
 package com.flarefitness.backend.security;
 
 import com.flarefitness.backend.exception.BadRequestException;
+import com.flarefitness.backend.entity.User;
 import java.time.Duration;
 import java.util.Locale;
 import java.util.UUID;
@@ -25,31 +26,39 @@ public class PasswordResetTokenStore {
         this.ttlSeconds = ttlSeconds;
     }
 
-    public String issue(String email) {
+    public String issue(User user) {
         String token = UUID.randomUUID().toString();
-        redisTemplate.opsForValue().set(key(token), normalizeEmail(email), Duration.ofSeconds(ttlSeconds));
+        redisTemplate.opsForValue().set(key(token), binding(user), Duration.ofSeconds(ttlSeconds));
         return token;
     }
 
-    public void consume(String email, String token) {
+    public void consume(User user, String token) {
         String normalizedToken = String.valueOf(token == null ? "" : token).trim();
-        String storedEmail = redisTemplate.opsForValue().getAndDelete(key(normalizedToken));
-        if (storedEmail == null) {
-            // Compatibility for short-lived reset links created before token
-            // fingerprinting was introduced. The legacy key is deleted on use.
-            storedEmail = redisTemplate.opsForValue().getAndDelete(legacyKey(normalizedToken));
-        }
-        if (storedEmail == null || !storedEmail.equals(normalizeEmail(email))) {
+        String storedBinding = redisTemplate.opsForValue().getAndDelete(key(normalizedToken));
+        // Email-only and raw-key legacy grants cannot establish account identity.
+        // They expire normally; the user must complete a fresh recovery challenge.
+        if (!binding(user).equals(storedBinding)) {
             throw new BadRequestException("Phien dat lai mat khau khong hop le hoac da het han.");
         }
     }
 
-    private String key(String token) {
-        return tokenPrefix + TokenFingerprint.sha256(token);
+    private String binding(User user) {
+        String id = user.getId();
+        String email = normalizeEmail(user.getEmail());
+        long version = user.getAuthVersion() == null ? 0L : user.getAuthVersion();
+        if (id == null || id.isBlank() || email.isBlank() || version < 0) {
+            throw new IllegalArgumentException("Recovery requires a persisted account identity");
+        }
+        StringBuilder identity = new StringBuilder();
+        for (String field : java.util.List.of(id, Long.toString(version), email,
+                user.getEmailVerifiedAt() == null ? "-" : user.getEmailVerifiedAt().toString())) {
+            identity.append(field.length()).append(':').append(field);
+        }
+        return "v2:" + TokenFingerprint.sha256(identity.toString());
     }
 
-    private String legacyKey(String token) {
-        return tokenPrefix + token;
+    private String key(String token) {
+        return tokenPrefix + TokenFingerprint.sha256(token);
     }
 
     private String normalizeEmail(String email) {

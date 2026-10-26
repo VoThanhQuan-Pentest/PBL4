@@ -39,6 +39,11 @@ public interface UserRepository extends JpaRepository<User, String> {
     @Query("select u from User u where lower(u.email) = lower(:email) and u.deleted = false")
     Optional<User> findByEmailIgnoreCase(@Param("email") String email);
 
+    /** Serialize recovery with profile/password/administrative account mutations. */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select u from User u where lower(u.email) = lower(:email) and u.deleted = false")
+    Optional<User> findByEmailIgnoreCaseForUpdate(@Param("email") String email);
+
     @Query("select count(u) > 0 from User u where lower(u.username) = lower(:username) and u.deleted = false")
     boolean existsByUsernameIgnoreCase(@Param("username") String username);
 

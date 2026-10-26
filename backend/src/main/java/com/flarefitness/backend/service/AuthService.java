@@ -188,9 +188,9 @@ public class AuthService {
         passwordPolicy.validateNewPassword(request.newPassword());
 
         String requestEmail = request.email().trim();
-        User user = userRepository.findByEmailIgnoreCase(requestEmail)
+        User user = userRepository.findByEmailIgnoreCaseForUpdate(requestEmail)
                 .orElseThrow(() -> new BadRequestException("Thong tin khoi phuc khong dung."));
-        passwordResetTokenStore.consume(requestEmail, request.resetToken());
+        passwordResetTokenStore.consume(user, request.resetToken());
         user.setPassword(passwordEncoder.encode(request.newPassword()));
         user.setAuthVersion((user.getAuthVersion() == null ? 0L : user.getAuthVersion()) + 1L);
         userRepository.save(user);
@@ -256,13 +256,13 @@ public class AuthService {
         }
     }
 
+    @Transactional
     public PasswordResetVerificationResponse verifyForgotPasswordOtp(ForgotPasswordOtpVerifyRequest request) {
         String email = request.email().trim();
-        if (userRepository.findByEmailIgnoreCase(email).isEmpty()) {
-            throw new BadRequestException("Ma OTP khong dung hoac da het han.");
-        }
+        User user = userRepository.findByEmailIgnoreCaseForUpdate(email)
+                .orElseThrow(() -> new BadRequestException("Ma OTP khong dung hoac da het han."));
         emailOtpService.verifyOtp(EmailOtpService.PURPOSE_FORGOT_PASSWORD, email, request.otpCode());
-        return new PasswordResetVerificationResponse(passwordResetTokenStore.issue(email));
+        return new PasswordResetVerificationResponse(passwordResetTokenStore.issue(user));
     }
 
     public CurrentUserResponse getCurrentUser(String username) {

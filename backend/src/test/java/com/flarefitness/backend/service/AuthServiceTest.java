@@ -133,7 +133,7 @@ class AuthServiceTest {
         user.setId("legacy-user");
         user.setUsername("legacy-user");
         user.setEmail("legacy@example.test");
-        when(userRepository.findByEmailIgnoreCase("legacy@example.test")).thenReturn(Optional.of(user));
+        when(userRepository.findByEmailIgnoreCaseForUpdate("legacy@example.test")).thenReturn(Optional.of(user));
         when(passwordEncoder.encode("A long replacement password")).thenReturn("{bcrypt-sha256}$2a$12$replacement");
 
         authService.forgotPassword(new ForgotPasswordRequest(
