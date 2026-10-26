@@ -57,7 +57,8 @@ class EmailOtpScopedProofTest {
         verify(values).set(eq("test:otp:LAB_ACTION_PROOF:" + scope + ":owner@example.test"), anyString(), eq(Duration.ofSeconds(300)));
         verify(values).setIfAbsent("test:otp:cooldown:LAB_ACTION_PROOF:owner@example.test", "1", Duration.ofSeconds(60));
         String stored = "h1:" + encoder.encode("123456");
-        when(values.get("test:otp:LAB_ACTION_PROOF:" + scope + ":owner@example.test")).thenReturn(stored);
+        doReturn(null).when(values).get("test:otp:attempt:LAB_ACTION_PROOF:" + scope + ":owner@example.test");
+        doReturn(stored).when(values).get("test:otp:LAB_ACTION_PROOF:" + scope + ":owner@example.test");
         doReturn(1L).when(redis).execute(any(), anyList(), any(), any(), any(), any());
         service.verifyLabActionProofOtp("owner@example.test", scope, "123456");
         verify(redis).execute(any(), eq(List.of("test:otp:LAB_ACTION_PROOF:" + scope + ":owner@example.test",
