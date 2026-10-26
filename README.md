@@ -71,8 +71,11 @@ khẩu, cấu hình OTP/mail hoặc dữ liệu lịch sử để thực hiện 
 
 Chính sách mật khẩu mới dùng chung cho đăng ký, đổi/khôi phục và quản trị tạo/
 đổi mật khẩu: 12–128 ký tự Unicode, cho phép passphrase và giữ nguyên khoảng
-trắng/chữ hoa thường. Tài khoản đang có vẫn đăng nhập bằng mật khẩu hiện tại;
-không reset hay bắt đổi mật khẩu định kỳ. Backend kiểm tra offline bằng 46.640
+trắng/chữ hoa thường. Không reset hay bắt đổi mật khẩu định kỳ. Riêng hash
+BCrypt cũ không thể xác minh phần vượt 72 byte UTF-8 và có thể nhập nhằng byte
+NUL ở biên: candidate từ chối đầu vào vượt giới hạn đó hoặc có NUL, yêu cầu
+đặt lại qua luồng khôi phục hiện có. Mật khẩu dùng
+hash mới vẫn hỗ trợ đủ 128 ký tự Unicode. Backend kiểm tra offline bằng 46.640
 hash của mật khẩu phổ biến/đã xuất hiện trong corpus công khai, cùng danh sách
 ngữ cảnh `flarefitness`, `flaresoc`, `pbl4`, `socdemo`, `socpractice`,
 `securitymonitor` và biến thể phân cách/chữ hoa/leet cơ bản. Đây là tập hữu hạn,

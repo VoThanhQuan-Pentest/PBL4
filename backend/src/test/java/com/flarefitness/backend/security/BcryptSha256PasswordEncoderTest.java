@@ -36,4 +36,58 @@ class BcryptSha256PasswordEncoderTest {
         assertThat(passwordEncoder.matches("DemoOnly#2026", demoHash)).isTrue();
         assertThat(passwordEncoder.matches("not-the-demo-password", demoHash)).isFalse();
     }
+
+    private final org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder bareEncoder =
+            new org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder(4);
+
+    @Test void aLegacyProofCannotAcceptAnUnverifiableSuffix() {
+        String password = "x".repeat(72);
+        String hash = bareEncoder.encode(password);
+        assertThat(passwordEncoder.matches(password, hash)).isTrue();
+        assertThat(passwordEncoder.matches(password + "z", hash)).isFalse();
+        assertThat(passwordEncoder.upgradeEncoding(hash)).isTrue();
+    }
+
+    @Test void theLegacyBoundaryCountsUtf8BytesRatherThanCharacters() {
+        String password = "🐚".repeat(18);
+        String hash = bareEncoder.encode(password);
+        assertThat(passwordEncoder.matches(password, hash)).isTrue();
+        assertThat(passwordEncoder.matches(password + "🐚", hash)).isFalse();
+    }
+
+    @Test void versionedHashesPreserveTheSuffixOfLongUnicodePasswords() {
+        String password = "🐚".repeat(127) + "z";
+        String hash = passwordEncoder.encode(password);
+        assertThat(passwordEncoder.matches(password, hash)).isTrue();
+        assertThat(passwordEncoder.matches("🐚".repeat(127) + "y", hash)).isFalse();
+    }
+
+    @Test void acceptedLegacyPasswordsStillRequireAnExactProof() {
+        String password = "  amber rivers cross silent hills  ";
+        String hash = bareEncoder.encode(password);
+        assertThat(passwordEncoder.matches(password, hash)).isTrue();
+        assertThat(passwordEncoder.matches(password.trim(), hash)).isFalse();
+        assertThat(passwordEncoder.matches(null, hash)).isFalse();
+    }
+
+    @Test void supportedLegacyVersionsKeepTheirValidByteBoundaryProofs() {
+        for (int size : new int[]{71, 72}) {
+            String password = "x".repeat(size);
+            String hash = bareEncoder.encode(password);
+            for (String version : new String[]{"$2a$", "$2b$", "$2y$"}) {
+                assertThat(passwordEncoder.matches(password, version + hash.substring(4))).isTrue();
+            }
+        }
+    }
+
+    @Test void aTerminalNulCannotAliasTheLegacyBcryptTerminator() {
+        for (String password : new String[]{"x".repeat(71), "🐚".repeat(17) + "xxx"}) {
+            String hash = bareEncoder.encode(password);
+            assertThat(passwordEncoder.matches(password, hash)).isTrue();
+            assertThat(passwordEncoder.matches(password + '\0', hash)).isFalse();
+            String versioned = passwordEncoder.encode(password + '\0');
+            assertThat(passwordEncoder.matches(password + '\0', versioned)).isTrue();
+            assertThat(passwordEncoder.matches(password, versioned)).isFalse();
+        }
+    }
 }

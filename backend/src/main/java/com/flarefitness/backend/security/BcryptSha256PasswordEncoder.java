@@ -36,6 +36,13 @@ public final class BcryptSha256PasswordEncoder implements PasswordEncoder {
         if (encodedPassword.startsWith(PREFIX)) {
             return bcrypt.matches(prehash(rawPassword), encodedPassword.substring(PREFIX.length()));
         }
+        // Bare BCrypt hashes cannot prove any bytes beyond the first 72. Do not
+        // upgrade an ambiguous legacy proof into a hash of an attacker-chosen suffix.
+        // A terminal NUL can also alias BCrypt's appended terminator at the boundary.
+        if (rawPassword == null || rawPassword.toString().indexOf('\0') >= 0
+                || rawPassword.toString().getBytes(StandardCharsets.UTF_8).length > 72) {
+            return false;
+        }
         return bcrypt.matches(rawPassword, encodedPassword);
     }
 

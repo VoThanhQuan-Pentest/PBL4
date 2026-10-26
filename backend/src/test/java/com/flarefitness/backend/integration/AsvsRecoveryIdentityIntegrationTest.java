@@ -107,6 +107,51 @@ class AsvsRecoveryIdentityIntegrationTest extends ContainerizedIntegrationTest {
         assertThat(current.getAuthVersion()).isEqualTo(owner.getAuthVersion() + 1);
     }
 
+    @Test void anAmbiguousLegacySuffixCannotAuthenticateOrMigrateTheStoredHash() {
+        User owner = user(null, "Nhan vien");
+        String password = "x".repeat(72);
+        String legacyHash = new org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder(4).encode(password);
+        owner.setPassword(legacyHash); users.saveAndFlush(owner);
+        assertThatThrownBy(() -> auth.login(
+                new com.flarefitness.backend.dto.auth.LoginRequest(owner.getUsername(), password + "z"),
+                "192.0.2.182", "ASVS legacy boundary fixture"))
+                .isInstanceOf(com.flarefitness.backend.exception.UnauthorizedException.class);
+        assertThat(users.findActiveById(owner.getId()).orElseThrow().getPassword()).isEqualTo(legacyHash);
+        auth.login(new com.flarefitness.backend.dto.auth.LoginRequest(owner.getUsername(), password),
+                "192.0.2.182", "ASVS legacy boundary fixture");
+        String migrated = users.findActiveById(owner.getId()).orElseThrow().getPassword();
+        assertThat(migrated).startsWith(com.flarefitness.backend.security.BcryptSha256PasswordEncoder.PREFIX);
+        assertThat(encoder.matches(password, migrated)).isTrue();
+        assertThat(encoder.matches(password + "z", migrated)).isFalse();
+    }
+
+    @Test void independentRecoveryRestoresAccessAfterAnOversizedLegacyProofIsRejected() {
+        User owner = user(null, "Nhan vien");
+        String password = "x".repeat(72);
+        owner.setPassword(new org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder(4).encode(password));
+        users.saveAndFlush(owner);
+        assertThatThrownBy(() -> auth.login(
+                new com.flarefitness.backend.dto.auth.LoginRequest(owner.getUsername(), password + "z"),
+                "192.0.2.183", "ASVS legacy recovery fixture"))
+                .isInstanceOf(com.flarefitness.backend.exception.UnauthorizedException.class);
+        reset(owner.getEmail(), grants.issue(owner));
+        assertThat(auth.login(new com.flarefitness.backend.dto.auth.LoginRequest(owner.getUsername(), NEW),
+                "192.0.2.183", "ASVS legacy recovery fixture").user().id()).isEqualTo(owner.getId());
+        assertThat(encoder.matches(NEW, users.findActiveById(owner.getId()).orElseThrow().getPassword())).isTrue();
+    }
+
+    @Test void aTerminalNulCannotMigrateALegacyHashAtTheAuthenticationBoundary() {
+        User owner = user(null, "Nhan vien");
+        String password = "x".repeat(71);
+        String legacyHash = new org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder(4).encode(password);
+        owner.setPassword(legacyHash); users.saveAndFlush(owner);
+        assertThatThrownBy(() -> auth.login(
+                new com.flarefitness.backend.dto.auth.LoginRequest(owner.getUsername(), password + '\0'),
+                "192.0.2.184", "ASVS legacy terminator fixture"))
+                .isInstanceOf(com.flarefitness.backend.exception.UnauthorizedException.class);
+        assertThat(users.findActiveById(owner.getId()).orElseThrow().getPassword()).isEqualTo(legacyHash);
+    }
+
     private void reset(String email, String token) {
         auth.forgotPassword(new ForgotPasswordRequest(email, token, NEW, NEW));
     }

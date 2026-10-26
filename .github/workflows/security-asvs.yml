@@ -32,7 +32,7 @@ jobs:
         working-directory: backend
         run: >-
           mvn -B -ntp
-          -Dtest=AsvsIdleSessionIntegrationTest,AsvsOtpStorageIntegrationTest,AsvsPasswordPolicyIntegrationTest,PasswordPolicyTest,AsvsLoginOtpIntegrationTest,AsvsAuthorizationIntegrationTest,AsvsRecoveryIdentityIntegrationTest,AdminServiceTest,EmailOtpScopedProofTest,ProfileServiceTest,AuthServiceTest,PasswordResetTokenStoreTest,SensitiveActionConfirmationServiceTest,SiemSecurityIntegrationTest,SocWorkflowMatrixIntegrationTest,SiemContainmentIntegrationTest,SocSessionResponseIntegrationTest,SensitiveActionConfirmationIntegrationTest,ProductionSecurityConfigurationValidatorTest
+          -Dtest=BcryptSha256PasswordEncoderTest,AsvsIdleSessionIntegrationTest,AsvsOtpStorageIntegrationTest,AsvsPasswordPolicyIntegrationTest,PasswordPolicyTest,AsvsLoginOtpIntegrationTest,AsvsAuthorizationIntegrationTest,AsvsRecoveryIdentityIntegrationTest,AdminServiceTest,EmailOtpScopedProofTest,ProfileServiceTest,AuthServiceTest,PasswordResetTokenStoreTest,SensitiveActionConfirmationServiceTest,SiemSecurityIntegrationTest,SocWorkflowMatrixIntegrationTest,SiemContainmentIntegrationTest,SocSessionResponseIntegrationTest,SensitiveActionConfirmationIntegrationTest,ProductionSecurityConfigurationValidatorTest
           test
   web-pipeline-security:
     name: Trusted TLS, bounded DAST and real ELK verification
