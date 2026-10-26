@@ -69,7 +69,10 @@ class AsvsLoginOtpIntegrationTest extends ContainerizedIntegrationTest {
         MvcResult result = verify(challenge, codes.get(user.getEmail()), IP, AGENT);
         assertThat(result.getResponse().getStatus()).isEqualTo(200);
         assertThat(result.getResponse().getCookie("access_token") != null).isTrue();
-        assertThat(mapper.readTree(result.getResponse().getContentAsString()).path("access_token").isNull()).isTrue();
+        assertThat(mapper.readTree(result.getResponse().getContentAsString()).hasNonNull("access_token")).isFalse();
+        var current = mvc.perform(get("/api/auth/me").cookie(result.getResponse().getCookie("access_token")))
+                .andExpect(status().isOk()).andReturn();
+        assertThat(mapper.readTree(current.getResponse().getContentAsString()).path("id").asText()).isEqualTo(user.getId());
         assertThat(verify(challenge, codes.get(user.getEmail()), IP, AGENT).getResponse().getStatus()).isEqualTo(401);
     }
 

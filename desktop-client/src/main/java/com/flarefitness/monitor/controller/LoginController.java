@@ -11,6 +11,7 @@ import javafx.scene.control.PasswordField;
 import javafx.scene.control.TextField;
 
 public class LoginController {
+    @FXML private javafx.scene.layout.VBox credentialsGroup;
     @FXML private TextField username;
     @FXML private PasswordField password;
     @FXML private Label errorLabel;
@@ -57,6 +58,7 @@ public class LoginController {
                     if (failure != null) { finishLogin(api, null, failure); return; }
                     if (attempt.challenge() == null) { finishLogin(api, attempt.session(), null); return; }
                     pendingApi = api;
+                    credentialsGroup.setVisible(false); credentialsGroup.setManaged(false);
                     challengeId = attempt.challenge().challengeId();
                     otpHint.setText("Mã đã gửi đến " + attempt.challenge().emailMasked() + ". Hiệu lực 5 phút.");
                     otpHint.setVisible(true); otpHint.setManaged(true);
@@ -72,6 +74,7 @@ public class LoginController {
         if (busy) return;
         if (pendingApi != null) pendingApi.clearSession();
         pendingApi = null; challengeId = null;
+        credentialsGroup.setVisible(true); credentialsGroup.setManaged(true);
         otpCode.clear(); password.clear(); errorLabel.setText("");
         otpHint.setVisible(false); otpHint.setManaged(false);
         otpCode.setVisible(false); otpCode.setManaged(false);

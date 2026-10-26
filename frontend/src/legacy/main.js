@@ -1419,6 +1419,9 @@ document.addEventListener('DOMContentLoaded', () => {
             pendingLoginChallenge = null;
             loginChallengeGeneration += 1;
             loginOtpGroup.classList.add('hidden');
+            document.getElementById('username').closest('.form-group').classList.remove('hidden');
+            document.getElementById('password').closest('.form-group').classList.remove('hidden');
+            loginForm.querySelector('.auth-helper-row').classList.remove('hidden');
             loginOtpCode.value = '';
             loginOtpCode.disabled = true;
             loginOtpCode.required = false;
@@ -1456,6 +1459,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (response.challenge_id) {
                     if (generation !== loginChallengeGeneration) return;
                     pendingLoginChallenge = response.challenge_id;
+                    document.getElementById('username').closest('.form-group').classList.add('hidden');
+                    document.getElementById('password').closest('.form-group').classList.add('hidden');
+                    loginForm.querySelector('.auth-helper-row').classList.add('hidden');
                     document.getElementById('username').disabled = true;
                     document.getElementById('password').disabled = true;
                     loginOtpGroup.classList.remove('hidden');
