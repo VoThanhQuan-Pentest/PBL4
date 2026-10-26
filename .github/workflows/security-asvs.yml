@@ -42,7 +42,6 @@ jobs:
     env:
       COMPOSE_PROJECT_NAME: pbl4-observability-runtime-${{ github.run_id }}-${{ github.run_attempt }}
       OBSERVABILITY_ROOT_DIR: ${{ github.workspace }}
-      ASVS_TLS_DIR: ${{ runner.temp }}/asvs-tls
       LOCAL_LAB_WEB_PORT: '8088'
       FLARE_LAB_TARGET: https://app.soc.test:8443
       OBSERVABILITY_COMPOSE_FILES: ${{ github.workspace }}/docker-compose.yml:${{ github.workspace }}/docker-compose.e2e.yml:${{ github.workspace }}/observability/docker-compose.monitor.yml:${{ github.workspace }}/observability/docker-compose.local.yml:${{ github.workspace }}/security/asvs/docker-compose.tls.yml
@@ -71,6 +70,7 @@ jobs:
               raise SystemExit('ASVS full-stack resource admission refused')
           PY
           echo "UEBA_OPERATOR_GID=$(id -g)" >> "$GITHUB_ENV"
+          echo "ASVS_TLS_DIR=$RUNNER_TEMP/asvs-tls" >> "$GITHUB_ENV"
       - name: Install the locked browser toolchain and local CA utilities
         run: |
           sudo apt-get update
