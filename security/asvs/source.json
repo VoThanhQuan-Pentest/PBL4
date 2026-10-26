@@ -1,0 +1,8 @@
+{
+  "standard": "OWASP ASVS",
+  "version": "5.0.0",
+  "revision": "3383877f732ce89a458a1af43288f2f1b1d7db0c",
+  "source": "https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/docs_en/OWASP_Application_Security_Verification_Standard_5.0.0_en.csv",
+  "sha256": "98c8fe911b9edb403af8ee05d3ce8201ecac2659e313b053890a62847cdcf680",
+  "license": "LICENSE.md"
+}
