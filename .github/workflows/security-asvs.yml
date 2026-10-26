@@ -1,0 +1,35 @@
+name: ASVS security verification
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: asvs-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  matrix-integrity:
+    name: ASVS catalog and evidence integrity
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Test official catalog and fail-closed evidence validation
+        run: python3 -m unittest discover -s scripts/security -p test_asvs_matrix.py -v
+  api-security:
+    name: Real API authorization and recovery regression tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+          cache-dependency-path: backend/pom.xml
+      - name: Verify recovery, ownership, CSRF and L1/L2 controls on disposable databases
+        working-directory: backend
+        run: >-
+          mvn -B -ntp
+          -Dtest=AsvsAuthorizationIntegrationTest,ProfileServiceTest,AuthServiceTest,PasswordResetTokenStoreTest,SensitiveActionConfirmationServiceTest,SiemSecurityIntegrationTest,SocWorkflowMatrixIntegrationTest,SiemContainmentIntegrationTest,SocSessionResponseIntegrationTest,SensitiveActionConfirmationIntegrationTest,ProductionSecurityConfigurationValidatorTest
+          test
