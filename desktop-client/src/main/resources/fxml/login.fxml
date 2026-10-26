@@ -11,6 +11,9 @@
         <TextField fx:id="username" promptText="Username" onAction="#login"/>
         <Label text="Password" labelFor="$password"/>
         <PasswordField fx:id="password" promptText="Password" onAction="#login"/>
+        <Label fx:id="otpHint" visible="false" managed="false" wrapText="true"/>
+        <TextField fx:id="otpCode" promptText="Mã OTP 6 chữ số" visible="false" managed="false" onAction="#login"/>
+        <Button fx:id="restartButton" text="Đăng nhập lại / yêu cầu mã mới" visible="false" managed="false" onAction="#restartLogin"/>
         <Label fx:id="errorLabel" styleClass="error-text" wrapText="true"/>
         <Button fx:id="loginButton" text="Đăng nhập" onAction="#login" defaultButton="true" maxWidth="Infinity" styleClass="primary-button"/>
     </VBox>

@@ -98,7 +98,17 @@ public class AuthService {
     @org.springframework.beans.factory.annotation.Autowired(required=false)
     private com.flarefitness.backend.service.siem.SiemAuthTelemetry authTelemetry;
 
+    @org.springframework.beans.factory.annotation.Value("${app.security.login-otp-enabled:false}")
+    private boolean loginOtpEnabled;
+
     public LoginResponse login(LoginRequest request, String ipAddress, String userAgent) {
+        if (loginOtpEnabled) {
+            throw new UnauthorizedException("Hoan tat OTP dang nhap de tiep tuc.");
+        }
+        return completeLogin(authenticateForLogin(request, ipAddress, userAgent), ipAddress, userAgent);
+    }
+
+    User authenticateForLogin(LoginRequest request, String ipAddress, String userAgent) {
         String username = normalizeUsername(request.username());
         if(authTelemetry!=null)authTelemetry.loginTarget(username);
         try {
@@ -124,7 +134,11 @@ public class AuthService {
             throw invalidCredentials(user.getId(), ipAddress, userAgent);
         }
 
-        ipRateLimitService.recordSuccessfulLogin(ipAddress, username);
+        return user;
+    }
+
+    LoginResponse completeLogin(User user, String ipAddress, String userAgent) {
+        ipRateLimitService.recordSuccessfulLogin(ipAddress, normalizeUsername(user.getUsername()));
         LoginResponse response = issueLoginResponse(user);
         auditLogService.success("AUTH_LOGIN", user.getId(), user.getId(), "USER", user.getId());
         if (securityEventService.isPostLoginEnabled()) {

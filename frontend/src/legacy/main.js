@@ -1410,30 +1410,62 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         });
 
+        let pendingLoginChallenge = null;
+        let loginSubmissionPending = false;
+        let loginChallengeGeneration = 0;
+        const loginOtpGroup = document.getElementById('login-otp-group');
+        const loginOtpCode = document.getElementById('login-otp-code');
+        function resetLoginChallenge() {
+            pendingLoginChallenge = null;
+            loginChallengeGeneration += 1;
+            loginOtpGroup.classList.add('hidden');
+            loginOtpCode.value = '';
+            loginOtpCode.disabled = true;
+            loginOtpCode.required = false;
+            document.getElementById('username').disabled = false;
+            document.getElementById('password').disabled = false;
+            document.getElementById('password').value = '';
+            loginForm.querySelector('[type="submit"]').textContent = 'Đăng nhập';
+        }
+        document.getElementById('login-otp-restart').addEventListener('click', () => {
+            if (!loginSubmissionPending) resetLoginChallenge();
+        });
+        loginOverlay.addEventListener('overlay:close', resetLoginChallenge);
         loginForm.addEventListener('submit', async event => {
             event.preventDefault();
+            if (loginSubmissionPending) return;
+            loginSubmissionPending = true;
+            const submitButton = loginForm.querySelector('[type="submit"]');
+            submitButton.disabled = true;
+            const generation = loginChallengeGeneration;
             loginError.classList.add('hidden');
-            const loginPayload = {
-                username: document.getElementById('username').value.trim(),
-                password: document.getElementById('password').value
-            };
-
+            const challenge = pendingLoginChallenge;
+            const loginPayload = challenge
+                ? { challenge_id: challenge, otp_code: loginOtpCode.value.trim() }
+                : { username: document.getElementById('username').value.trim(), password: document.getElementById('password').value };
             try {
-                await withAuthCookieMutationLock(async () => {
-                    // A preceding logout response can rotate/delete Spring's
-                    // CSRF cookie even when it no longer deletes auth state.
+                const response = await withAuthCookieMutationLock(async () => {
                     resetCsrfToken();
-                    const loginResponse = await apiRequest('/auth/login', {
-                        method: 'POST',
-                        auth: false,
-                        body: loginPayload
+                    const result = await apiRequest(challenge ? '/auth/login/otp' : '/auth/login', {
+                        method: 'POST', auth: false, body: loginPayload
                     });
-                    // Updating the in-memory authority and broadcasting its
-                    // epoch are part of the same cookie mutation transaction.
-                    applyLoginSession(loginResponse);
-                    return loginResponse;
+                    if (!result.challenge_id) applyLoginSession(result);
+                    return result;
                 });
-
+                document.getElementById('password').value = '';
+                if (response.challenge_id) {
+                    if (generation !== loginChallengeGeneration) return;
+                    pendingLoginChallenge = response.challenge_id;
+                    document.getElementById('username').disabled = true;
+                    document.getElementById('password').disabled = true;
+                    loginOtpGroup.classList.remove('hidden');
+                    loginOtpCode.disabled = false;
+                    loginOtpCode.required = true;
+                    document.getElementById('login-otp-hint').textContent = `Mã đã gửi đến ${response.email_masked}. Hết hạn sau 5 phút.`;
+                    submitButton.textContent = 'Xác minh OTP';
+                    loginOtpCode.focus();
+                    return;
+                }
                 closeOverlay(loginOverlay);
                 loginForm.reset();
                 await syncCurrentUserStateFromApi();
@@ -1443,6 +1475,11 @@ document.addEventListener('DOMContentLoaded', () => {
             } catch (error) {
                 loginError.textContent = error.message;
                 loginError.classList.remove('hidden');
+                document.getElementById('password').value = '';
+                loginOtpCode.value = '';
+            } finally {
+                loginSubmissionPending = false;
+                submitButton.disabled = false;
             }
         });
 

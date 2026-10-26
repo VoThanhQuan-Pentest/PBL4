@@ -929,7 +929,13 @@
                 </div>
                 <div class="form-group">
                     <label for="password" class="text-14">Mật khẩu</label>
-                    <input type="password" id="password" required placeholder="admin123">
+                    <input type="password" id="password" required autocomplete="current-password" placeholder="Mật khẩu">
+                </div>
+                <div id="login-otp-group" class="form-group hidden">
+                    <label for="login-otp-code" class="text-14">Mã OTP đăng nhập</label>
+                    <p id="login-otp-hint" role="status"></p>
+                    <input id="login-otp-code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" disabled>
+                    <button id="login-otp-restart" class="auth-helper-link" type="button">Đăng nhập lại / yêu cầu mã mới</button>
                 </div>
                 <p id="login-error" class="error-msg hidden">Sai tên đăng nhập hoặc mật khẩu.</p>
                 <div class="auth-helper-row">

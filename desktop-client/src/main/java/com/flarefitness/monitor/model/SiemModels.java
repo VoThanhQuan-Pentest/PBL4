@@ -58,6 +58,8 @@ public final class SiemModels {
     public record User(String id, String username, String role, String hoTen, String email, String sdt) {
     }
 
+    public record LoginChallenge(String challengeId, long expiresIn, String emailMasked, String channel) { }
+    public record LoginAttempt(LoginResponse session, LoginChallenge challenge) { }
     public record LoginResponse(String accessToken, long expiresIn, User user) {
     }
 

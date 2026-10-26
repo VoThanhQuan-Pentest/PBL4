@@ -18,6 +18,35 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 class SiemApiClientTest {
+    @Test void challengeDoesNotEstablishAClientSessionBeforeOtp() throws Exception {
+        server.removeContext("/api/auth/login");
+        server.createContext("/api/auth/login", exchange -> {
+            assertEquals("/api/auth/login", exchange.getRequestURI().getPath());
+            respond(exchange, 202, """
+                    {"challenge_id":"12345678-1234-1234-1234-123456789012","expires_in":300,
+                    "email_masked":"a***@example.test","channel":"EMAIL_OTP"}
+                    """, null);
+        });
+        server.createContext("/api/auth/login/otp", exchange -> {
+            assertEquals("csrf-test", exchange.getRequestHeaders().getFirst("X-XSRF-TOKEN"));
+            var body = new com.fasterxml.jackson.databind.ObjectMapper().readTree(exchange.getRequestBody());
+            assertEquals("12345678-1234-1234-1234-123456789012", body.path("challenge_id").asText());
+            assertEquals("123456", body.path("otp_code").asText());
+            csrfValue.set("csrf-rotated");
+            respond(exchange, 200, """
+                    {"access_token":null,"expires_in":3600,"user":{"id":"analyst-1",
+                    "username":"analyst","role":"Security analyst","ho_ten":"SOC Analyst"}}
+                    """, "access_token=jwt-test; Path=/; HttpOnly; SameSite=Strict");
+        });
+        var client = new SiemApiClient(baseUrl);
+        var attempt = client.beginLogin("analyst", "secret").get(3, TimeUnit.SECONDS);
+        assertEquals(null, attempt.session());
+        assertEquals(300, attempt.challenge().expiresIn());
+        var response = client.verifyLoginOtp(attempt.challenge().challengeId(), "123456").get(3, TimeUnit.SECONDS);
+        assertEquals("analyst", response.user().username());
+        assertEquals(2, client.overview().get(3, TimeUnit.SECONDS).openIncidents());
+    }
+
     @Test
     void readsLimitedPolicyAndSubmitsVersionedReviewsWithAuthenticatedCsrf() throws Exception {
         server.createContext("/api/siem/postlogin-policy",exchange -> respond(exchange,200,

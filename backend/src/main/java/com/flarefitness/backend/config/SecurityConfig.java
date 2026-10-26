@@ -90,6 +90,7 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/auth/csrf").permitAll()
                         .requestMatchers(HttpMethod.POST,
                                 "/api/auth/login",
+                                "/api/auth/login/otp",
                                 "/api/auth/register",
                                 "/api/auth/register/otp",
                                 "/api/auth/forgot-password",

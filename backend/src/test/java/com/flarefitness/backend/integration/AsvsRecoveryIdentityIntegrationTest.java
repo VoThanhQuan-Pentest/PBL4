@@ -30,7 +30,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 /** SMTP is captured; identity/epoch/OTP/grant checks use real MySQL and Redis. */
-@SpringBootTest
+@SpringBootTest(properties = "management.health.mail.enabled=false")
 class AsvsRecoveryIdentityIntegrationTest extends ContainerizedIntegrationTest {
     @Autowired UserRepository users;
     @Autowired AuthService auth;

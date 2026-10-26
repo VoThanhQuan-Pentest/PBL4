@@ -48,13 +48,28 @@ public class AuthController {
         this.cookieSecure = cookieSecure;
     }
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.flarefitness.backend.service.LoginOtpService loginOtpService;
+
     @PostMapping("/login")
-    public ResponseEntity<LoginResponse> login(
+    public ResponseEntity<?> login(
             @Valid @RequestBody LoginRequest request,
             HttpServletRequest httpServletRequest
     ) {
+        if (loginOtpService != null && loginOtpService.isEnabled()) {
+            return ResponseEntity.accepted().body(loginOtpService.begin(request,
+                    ipAddressResolver.resolve(httpServletRequest), httpServletRequest.getHeader("User-Agent")));
+        }
         return loginResponse(authService.login(request, ipAddressResolver.resolve(httpServletRequest),
                 httpServletRequest.getHeader("User-Agent")));
+    }
+
+    @PostMapping("/login/otp")
+    public ResponseEntity<LoginResponse> verifyLoginOtp(
+            @Valid @RequestBody com.flarefitness.backend.dto.auth.LoginOtpRequest request,
+            HttpServletRequest servletRequest) {
+        return loginResponse(loginOtpService.verify(request, ipAddressResolver.resolve(servletRequest),
+                servletRequest.getHeader("User-Agent")));
     }
 
     @GetMapping("/csrf")

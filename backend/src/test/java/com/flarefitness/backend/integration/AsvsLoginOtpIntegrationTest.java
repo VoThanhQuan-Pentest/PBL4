@@ -1,0 +1,173 @@
+package com.flarefitness.backend.integration;
+
+import static org.assertj.core.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.flarefitness.backend.dto.auth.LoginRequest;
+import com.flarefitness.backend.entity.User;
+import com.flarefitness.backend.exception.UnauthorizedException;
+import com.flarefitness.backend.repository.UserRepository;
+import com.flarefitness.backend.security.TokenFingerprint;
+import com.flarefitness.backend.service.AuthService;
+import java.time.LocalDateTime;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Pattern;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.boot.webmvc.test.autoconfigure.MockMvcPrint;
+import org.springframework.core.env.Environment;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.http.MediaType;
+import org.springframework.mail.SimpleMailMessage;
+import org.springframework.mail.javamail.JavaMailSender;
+import org.springframework.mock.web.MockCookie;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.web.servlet.MvcResult;
+
+/** Real API + MySQL/Redis, SMTP captured; no credentials or session cookies printed on failure. */
+@SpringBootTest(properties = {"app.security.login-otp-enabled=true", "management.health.mail.enabled=false"})
+@AutoConfigureMockMvc(print = MockMvcPrint.NONE)
+class AsvsLoginOtpIntegrationTest extends ContainerizedIntegrationTest {
+    @Autowired MockMvc mvc;
+    @Autowired ObjectMapper mapper;
+    @Autowired UserRepository users;
+    @Autowired PasswordEncoder passwords;
+    @Autowired StringRedisTemplate redis;
+    @Autowired Environment environment;
+    @Autowired AuthService auth;
+    @MockitoBean JavaMailSender mail;
+    private final Map<String, String> codes = new ConcurrentHashMap<>();
+    private static final String PASSWORD = "Synthetic!LoginPassphrase1";
+    private static final String IP = "192.0.2.141";
+    private static final String AGENT = "ASVS synthetic OTP client";
+
+    @BeforeEach void captureMail() {
+        codes.clear();
+        doAnswer(call -> {
+            SimpleMailMessage message = call.getArgument(0);
+            var matcher = Pattern.compile("\\b[0-9]{6}\\b").matcher(message.getText());
+            if (!matcher.find()) throw new AssertionError("Synthetic OTP delivery missing code");
+            codes.put(message.getTo()[0], matcher.group());
+            return null;
+        }).when(mail).send(any(SimpleMailMessage.class));
+    }
+
+    @Test void passwordProofCreatesNoSessionAndOtpIsSingleUse() throws Exception {
+        User user = fixture(); Challenge challenge = begin(user);
+        mvc.perform(get("/api/auth/me")).andExpect(status().isUnauthorized());
+        MvcResult result = verify(challenge, codes.get(user.getEmail()), IP, AGENT);
+        assertThat(result.getResponse().getStatus()).isEqualTo(200);
+        assertThat(result.getResponse().getCookie("access_token") != null).isTrue();
+        assertThat(mapper.readTree(result.getResponse().getContentAsString()).path("access_token").isNull()).isTrue();
+        assertThat(verify(challenge, codes.get(user.getEmail()), IP, AGENT).getResponse().getStatus()).isEqualTo(401);
+    }
+
+    @Test void concurrentVerificationCanIssueOnlyOneSession() throws Exception {
+        User user = fixture(); Challenge challenge = begin(user); String code = codes.get(user.getEmail());
+        try (var executor = java.util.concurrent.Executors.newFixedThreadPool(2)) {
+            java.util.concurrent.Callable<Integer> attempt = () -> verify(challenge, code, IP, AGENT).getResponse().getStatus();
+            var results = executor.invokeAll(java.util.List.of(attempt, attempt));
+            assertThat(java.util.List.of(results.get(0).get(), results.get(1).get())).containsExactlyInAnyOrder(200, 401);
+        }
+    }
+
+    @Test void challengeCannotMoveToAnotherClient() throws Exception {
+        User user = fixture(); Challenge challenge = begin(user); String code = codes.get(user.getEmail());
+        assertThat(verify(challenge, code, "192.0.2.142", AGENT).getResponse().getStatus()).isEqualTo(401);
+        assertThat(verify(challenge, code, IP, "Another client").getResponse().getStatus()).isEqualTo(401);
+        assertThat(verify(challenge, code, IP, AGENT).getResponse().getStatus()).isEqualTo(200);
+    }
+
+    @Test void aNewSecurityEpochInvalidatesPendingProof() throws Exception {
+        User user = fixture(); Challenge challenge = begin(user);
+        user.setAuthVersion(user.getAuthVersion() + 1); users.saveAndFlush(user);
+        assertThat(verify(challenge, codes.get(user.getEmail()), IP, AGENT).getResponse().getStatus()).isEqualTo(401);
+    }
+
+    @Test void accountIsolationAfterPasswordProofPreventsLogin() throws Exception {
+        User user = fixture(); Challenge challenge = begin(user);
+        user.setSocIsolated(true); users.saveAndFlush(user);
+        assertThat(verify(challenge, codes.get(user.getEmail()), IP, AGENT).getResponse().getStatus()).isEqualTo(401);
+    }
+
+    @Test void fiveFailuresExhaustTheAccountBudgetAndRestartCannotResetIt() throws Exception {
+        User user = fixture(); Challenge challenge = begin(user); String code = codes.get(user.getEmail());
+        String wrong = code.equals("000000") ? "000001" : "000000";
+        for (int attempt = 0; attempt < 5; attempt++) {
+            assertThat(verify(challenge, wrong, IP, AGENT).getResponse().getStatus()).isEqualTo(401);
+        }
+        assertThat(verify(challenge, code, IP, AGENT).getResponse().getStatus()).isEqualTo(401);
+        assertThat(login(user, PASSWORD).getResponse().getStatus()).isEqualTo(429);
+    }
+
+    @Test void expiredProofAndLegacyServiceEntryCannotIssueSessions() throws Exception {
+        User user = fixture(); Challenge challenge = begin(user);
+        String key = environment.getRequiredProperty("app.otp.redis-prefix") + "login:challenge:"
+                + TokenFingerprint.sha256(challenge.id());
+        redis.delete(key); // Controlled expiration, without waiting five minutes.
+        assertThat(verify(challenge, codes.get(user.getEmail()), IP, AGENT).getResponse().getStatus()).isEqualTo(401);
+        assertThatThrownBy(() -> auth.login(new LoginRequest(user.getUsername(), PASSWORD), IP, AGENT))
+                .isInstanceOf(UnauthorizedException.class);
+    }
+
+    @Test void wrongPasswordCannotSendMailOrCreateAChallenge() throws Exception {
+        User user = fixture(); MvcResult result = login(user, "Wrong!Passphrase");
+        assertThat(result.getResponse().getStatus()).isEqualTo(401);
+        assertThat(result.getResponse().getHeader("Set-Cookie")).isNull();
+        assertThat(codes.containsKey(user.getEmail())).isFalse();
+    }
+
+    @Test void otpSubmissionStillRequiresCsrf() throws Exception {
+        User user = fixture(); Challenge challenge = begin(user);
+        mvc.perform(post("/api/auth/login/otp").contentType(MediaType.APPLICATION_JSON)
+                .content(mapper.writeValueAsString(Map.of("challenge_id", challenge.id(), "otp_code", codes.get(user.getEmail())))))
+                .andExpect(status().isForbidden());
+    }
+
+    private Challenge begin(User user) throws Exception {
+        MvcResult result = login(user, PASSWORD);
+        assertThat(result.getResponse().getStatus()).isEqualTo(202);
+        assertThat(result.getResponse().getHeader("Set-Cookie")).isNull();
+        var body = mapper.readTree(result.getResponse().getContentAsString());
+        assertThat(body.has("access_token")).isFalse();
+        assertThat(body.path("expires_in").asLong()).isEqualTo(300);
+        assertThat(body.path("email_masked").asText()).doesNotContain(user.getUsername());
+        return new Challenge(body.path("challenge_id").asText());
+    }
+    private MvcResult login(User user, String password) throws Exception {
+        String csrf = csrf();
+        return mvc.perform(post("/api/auth/login").with(request -> { request.setRemoteAddr(IP); return request; })
+                .header("User-Agent", AGENT).cookie(new MockCookie("XSRF-TOKEN", csrf)).header("X-XSRF-TOKEN", csrf)
+                .contentType(MediaType.APPLICATION_JSON).content(mapper.writeValueAsString(Map.of("username", user.getUsername(), "password", password))))
+                .andReturn();
+    }
+    private MvcResult verify(Challenge challenge, String code, String ip, String agent) throws Exception {
+        String csrf = csrf();
+        return mvc.perform(post("/api/auth/login/otp").with(request -> { request.setRemoteAddr(ip); return request; })
+                .header("User-Agent", agent).cookie(new MockCookie("XSRF-TOKEN", csrf)).header("X-XSRF-TOKEN", csrf)
+                .contentType(MediaType.APPLICATION_JSON).content(mapper.writeValueAsString(Map.of("challenge_id", challenge.id(), "otp_code", code))))
+                .andReturn();
+    }
+    private String csrf() throws Exception {
+        return mapper.readTree(mvc.perform(get("/api/auth/csrf")).andReturn().getResponse().getContentAsString()).path("token").asText();
+    }
+    private User fixture() {
+        String id = "asvs-login-" + UUID.randomUUID();
+        User user = new User(); user.setId(id); user.setUsername(id); user.setRole("SOC L1");
+        user.setPassword(passwords.encode(PASSWORD)); user.setEmail(id + "@example.test");
+        user.setEmailVerifiedAt(LocalDateTime.now().withNano(0)); user.setHoTen("Synthetic login fixture");
+        user.setStatus("Hoat dong"); user.setCreatedAt(LocalDateTime.now()); user.setDeleted(false);
+        return users.saveAndFlush(user);
+    }
+    private record Challenge(String id) { }
+}

@@ -139,12 +139,31 @@ public class SiemApiClient {
         this.baseUri = candidate;
     }
 
+    public CompletableFuture<SiemModels.LoginAttempt> beginLogin(String username, String password) {
+        return refreshCsrf().thenCompose(ignored -> raw("POST", "/api/auth/login",
+                json(Map.of("username", username, "password", password)), true))
+                .thenCompose(response -> {
+                    if (response.statusCode() == 202) {
+                        var challenge = read(response.body(), SiemModels.LoginChallenge.class);
+                        if (challenge.challengeId() == null || challenge.challengeId().isBlank()) {
+                            throw new IllegalStateException("Missing login challenge");
+                        }
+                        return CompletableFuture.completedFuture(new SiemModels.LoginAttempt(null, challenge));
+                    }
+                    var session = read(response.body(), SiemModels.LoginResponse.class);
+                    return refreshCsrf().thenApply(ignored -> new SiemModels.LoginAttempt(session, null));
+                });
+    }
+
     public CompletableFuture<SiemModels.LoginResponse> login(String username, String password) {
-        return post("/api/auth/login", Map.of(
-                "username", username,
-                "password", password), SiemModels.LoginResponse.class)
-                // Authentication can rotate the CSRF token. Mutations in the SOC
-                // dashboard must use the authenticated session's fresh value.
+        return beginLogin(username, password).thenApply(attempt -> {
+            if (attempt.challenge() != null) throw new IllegalStateException("OTP login verification required");
+            return attempt.session();
+        });
+    }
+
+    public CompletableFuture<SiemModels.LoginResponse> verifyLoginOtp(String challengeId, String otpCode) {
+        return post("/api/auth/login/otp", Map.of("challenge_id", challengeId, "otp_code", otpCode), SiemModels.LoginResponse.class)
                 .thenCompose(response -> refreshCsrf().thenApply(ignored -> response));
     }
 
