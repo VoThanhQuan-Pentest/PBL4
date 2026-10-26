@@ -1446,11 +1446,11 @@ document.addEventListener('DOMContentLoaded', () => {
             try {
                 const response = await withAuthCookieMutationLock(async () => {
                     resetCsrfToken();
-                    const result = await apiRequest(challenge ? '/auth/login/otp' : '/auth/login', {
+                    const loginResponse = await apiRequest(challenge ? '/auth/login/otp' : '/auth/login', {
                         method: 'POST', auth: false, body: loginPayload
                     });
-                    if (!result.challenge_id) applyLoginSession(result);
-                    return result;
+                    if (!loginResponse.challenge_id) applyLoginSession(loginResponse);
+                    return loginResponse;
                 });
                 document.getElementById('password').value = '';
                 if (response.challenge_id) {

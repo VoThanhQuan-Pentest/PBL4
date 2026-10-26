@@ -32,6 +32,7 @@ import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mock.web.MockCookie;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
 /** Real API + MySQL/Redis, SMTP captured; no credentials or session cookies printed on failure. */
@@ -118,6 +119,14 @@ class AsvsLoginOtpIntegrationTest extends ContainerizedIntegrationTest {
         assertThat(verify(challenge, codes.get(user.getEmail()), IP, AGENT).getResponse().getStatus()).isEqualTo(401);
         assertThatThrownBy(() -> auth.login(new LoginRequest(user.getUsername(), PASSWORD), IP, AGENT))
                 .isInstanceOf(UnauthorizedException.class);
+    }
+
+    @Test void anAccountWithoutARecoveryContactFailsClosedWithoutSendingMail() throws Exception {
+        User user = fixture(); user.setEmail(null); users.saveAndFlush(user);
+        MvcResult result = login(user, PASSWORD);
+        assertThat(result.getResponse().getStatus()).isEqualTo(401);
+        assertThat(result.getResponse().getHeader("Set-Cookie")).isNull();
+        assertThat(codes).isEmpty();
     }
 
     @Test void wrongPasswordCannotSendMailOrCreateAChallenge() throws Exception {

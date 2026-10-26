@@ -71,18 +71,19 @@ public class LoginOtpService {
     public LoginChallengeResponse begin(LoginRequest request, String ip, String agent) {
         requireEnabled();
         User verified = auth.authenticateForLogin(request, ip, agent);
+        requireContact(verified);
         String passwordProof = verified.getPassword();
         String identityProof = PasswordResetTokenStore.recoveryScope(verified);
         User user = users.findActiveByIdForUpdate(verified.getId()).orElseThrow(LoginOtpService::invalid);
         // A managed entity may already exist from the password lookup. Refresh after the lock.
         entities.refresh(user, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
+        requireContact(user);
         // A password reset between credential validation and this lock must not create a new challenge.
         if (!Objects.equals(passwordProof, user.getPassword())
                 || !identityProof.equals(PasswordResetTokenStore.recoveryScope(user))) {
             throw invalid();
         }
         requireActive(user);
-        if (user.getEmail() == null || user.getEmail().indexOf('@') < 1) throw invalid();
         String account = accountKey(user.getId());
         if (attemptsExhausted(account)
                 || !Boolean.TRUE.equals(redis.opsForValue().setIfAbsent(account + ":cooldown", "1", Duration.ofSeconds(60)))) {
@@ -121,6 +122,7 @@ public class LoginOtpService {
         catch (IllegalArgumentException malformed) { throw invalid(); }
         User user = users.findActiveByIdForUpdate(userId).orElseThrow(LoginOtpService::invalid);
         requireActive(user);
+        requireContact(user);
         if (!PasswordResetTokenStore.recoveryScope(user).equals(fields[1])) throw invalid();
         String account = accountKey(userId);
         if (attemptsExhausted(account)) throw invalid();
@@ -134,6 +136,9 @@ public class LoginOtpService {
     private boolean attemptsExhausted(String account) {
         String count = redis.opsForValue().get(account + ":attempts");
         return count != null && Integer.parseInt(count) >= 5;
+    }
+    private static void requireContact(User user) {
+        if (user.getEmail() == null || user.getEmail().indexOf('@') < 1) throw invalid();
     }
     private void requireEnabled() { if (!enabled) throw invalid(); }
     private static void requireActive(User user) {
