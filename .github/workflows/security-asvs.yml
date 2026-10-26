@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Test official catalog and fail-closed evidence validation
-        run: python3 -m unittest discover -s scripts/security -p test_asvs_matrix.py -v
+        run: python3 -m unittest discover -s scripts/security -p 'test_*.py' -v
   api-security:
     name: Real API authorization and recovery regression tests
     runs-on: ubuntu-24.04
@@ -32,5 +32,94 @@ jobs:
         working-directory: backend
         run: >-
           mvn -B -ntp
-          -Dtest=AsvsAuthorizationIntegrationTest,AsvsRecoveryIdentityIntegrationTest,AdminServiceTest,EmailOtpScopedProofTest,ProfileServiceTest,AuthServiceTest,PasswordResetTokenStoreTest,SensitiveActionConfirmationServiceTest,SiemSecurityIntegrationTest,SocWorkflowMatrixIntegrationTest,SiemContainmentIntegrationTest,SocSessionResponseIntegrationTest,SensitiveActionConfirmationIntegrationTest,ProductionSecurityConfigurationValidatorTest
+          -Dtest=AsvsLoginOtpIntegrationTest,AsvsAuthorizationIntegrationTest,AsvsRecoveryIdentityIntegrationTest,AdminServiceTest,EmailOtpScopedProofTest,ProfileServiceTest,AuthServiceTest,PasswordResetTokenStoreTest,SensitiveActionConfirmationServiceTest,SiemSecurityIntegrationTest,SocWorkflowMatrixIntegrationTest,SiemContainmentIntegrationTest,SocSessionResponseIntegrationTest,SensitiveActionConfirmationIntegrationTest,ProductionSecurityConfigurationValidatorTest
           test
+  web-pipeline-security:
+    name: Trusted TLS, bounded DAST and real ELK verification
+    needs: [matrix-integrity, api-security]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    env:
+      COMPOSE_PROJECT_NAME: pbl4-observability-runtime-${{ github.run_id }}-${{ github.run_attempt }}
+      OBSERVABILITY_ROOT_DIR: ${{ github.workspace }}
+      ASVS_TLS_DIR: ${{ runner.temp }}/asvs-tls
+      LOCAL_LAB_WEB_PORT: '8088'
+      FLARE_LAB_TARGET: https://app.soc.test:8443
+      OBSERVABILITY_COMPOSE_FILES: ${{ github.workspace }}/docker-compose.yml:${{ github.workspace }}/docker-compose.e2e.yml:${{ github.workspace }}/observability/docker-compose.monitor.yml:${{ github.workspace }}/observability/docker-compose.local.yml:${{ github.workspace }}/security/asvs/docker-compose.tls.yml
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22.23.4'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Admit this disposable runner before starting services
+        run: |
+          python3 - <<'PY'
+          import sys
+          sys.path.insert(0, 'scripts/security')
+          from ci_scope import require_ci_scope
+          require_ci_scope()
+          PY
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          python3 - <<'PY'
+          from pathlib import Path
+          import shutil
+          memory = {r.split()[0].rstrip(':'): int(r.split()[1])*1024 for r in Path('/proc/meminfo').read_text().splitlines() if r.startswith(('MemTotal:', 'MemAvailable:'))}
+          gib = 1024**3
+          if memory['MemTotal'] < 14*gib or memory['MemAvailable'] < 12*gib or shutil.disk_usage('.').free < 30*gib:
+              raise SystemExit('ASVS full-stack resource admission refused')
+          PY
+          echo "UEBA_OPERATOR_GID=$(id -g)" >> "$GITHUB_ENV"
+      - name: Install the locked browser toolchain and local CA utilities
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libnss3-tools
+          npm --prefix frontend ci --ignore-scripts
+          cd frontend
+          npx playwright install --with-deps chromium
+      - name: Create the isolated trusted TLS frontend
+        run: python3 scripts/security/prepare_ci_tls.py
+      - name: Start the existing full-stack composition with ASVS resource limits
+        run: |
+          observability/scripts/local-lab.sh up
+          docker compose --env-file .env.e2e.example --project-name "$COMPOSE_PROJECT_NAME" --profile observability \
+            -f docker-compose.yml -f docker-compose.e2e.yml \
+            -f observability/docker-compose.monitor.yml -f observability/docker-compose.local.yml \
+            -f security/asvs/docker-compose.tls.yml up -d --no-deps tls-edge
+          curl --fail --silent --show-error --max-time 10 https://app.soc.test:8443/api/health > /dev/null
+      - name: Verify real HTTPS, secure browser cookies, cross-site isolation and revocation
+        working-directory: frontend
+        env:
+          NODE_EXTRA_CA_CERTS: ${{ runner.temp }}/asvs-tls/ca.crt
+        run: npx playwright test --config playwright.asvs.config.js
+      - name: Run bounded DAST against predefined synthetic-account GET targets
+        run: python3 scripts/security/run_zap.py
+      - name: Verify ELK evidence, GeoIP, queues and rule delivery after browser and DAST checks
+        run: observability/scripts/local-lab.sh verify
+      - name: Encrypt diagnostics without publishing raw sessions or findings
+        if: always()
+        run: python3 scripts/security/collect_ci_evidence.py
+      - name: Retain sanitized counts and encrypted private evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: asvs-private-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/asvs-results/*.cms
+            ${{ runner.temp }}/asvs-results/*-summary.json
+          retention-days: 7
+          if-no-files-found: warn
+      - name: Remove only this disposable project
+        if: always()
+        env:
+          LOCAL_LAB_PURGE_CONFIRM: 'yes'
+        run: |
+          python3 - <<'PY'
+          import sys, subprocess
+          sys.path.insert(0, 'scripts/security')
+          from ci_scope import require_ci_scope
+          project, root = require_ci_scope()
+          subprocess.run(['docker', 'rm', '-f', project+'-zap'], capture_output=True)
+          PY
+          observability/scripts/local-lab.sh purge

@@ -260,6 +260,14 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-dependency-check-v12-${{ hashFiles('backend/pom.xml') }}-
             ${{ runner.os }}-dependency-check-v12-
+      - name: Bootstrap a missing CVE cache from the fresh official NIST bulk feed
+        if: env.TRUSTED_NVD_AUDIT == 'true' && steps.dependency-check-cache.outputs.cache-hit != 'true'
+        run: |
+          python3 "$GITHUB_WORKSPACE/scripts/security/nvd_feed.py"
+          mvn -B -ntp org.owasp:dependency-check-maven:12.2.2:update-only \
+            '-DnvdDatafeedUrl=https://nvd.nist.gov/feeds/json/cve/2.0/nvdcve-2.0-{0}.json.gz' \
+            -DdataDirectory=${{ runner.temp }}/dependency-check-data \
+            -DnvdValidForHours=24
       - name: Update the Dependency-Check vulnerability database
         if: env.TRUSTED_NVD_AUDIT == 'true'
         env:

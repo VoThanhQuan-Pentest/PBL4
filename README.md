@@ -34,6 +34,31 @@ Base image candidate dùng Nginx 1.30.6 Alpine slim và Python 3.12 trên Ubuntu
 dependency lock của worker, model và input contract được giữ nguyên. Các kiểm
 tra tương thích worker vẫn bắt buộc trước khi chuyển bản vào lab.
 
+Candidate ASVS ngày 26/10 bổ sung đăng nhập mật khẩu → OTP email cho web và
+JavaFX. Bật bằng `APP_LOGIN_OTP_ENABLED=true` trên backend (compose chính chuyển
+biến này vào container); profile `security/asvs/docker-compose.tls.yml` bắt buộc
+bật trong project CI riêng. Mặc định tương thích của bản local vẫn là `false`;
+chế độ đó không được tính là đã đạt yêu cầu nhiều yếu tố. Đây là OTP qua email,
+không phải phương thức chống phishing.
+
+Khi bật OTP, `POST /api/auth/login` trả `202` với `challenge_id`, `expires_in`,
+`email_masked`, `channel`; chưa cấp cookie/JWT. `POST /api/auth/login/otp` nhận
+`challenge_id` và `otp_code`, vẫn bắt buộc CSRF, rồi trả response đăng nhập cũ
+và cookie khi hợp lệ. Challenge hết hạn sau 300 giây, gắn tài khoản/security
+version và IP/User-Agent quan sát bởi server; mã chỉ dùng một lần, tối đa năm
+lần sai trong 300 giây theo tài khoản, yêu cầu mã mới cách nhau 60 giây. Muốn
+mã mới, quay lại bước mật khẩu; không lưu mật khẩu, mã hoặc challenge trên disk.
+Tài khoản thiếu email phải được xử lý qua quy trình quản trị hiện có.
+
+Workflow CI có tùy chọn `asvs_validation`: kiểm tra API trên MySQL/Redis riêng,
+trình duyệt qua HTTPS có CA tin cậy, DAST giới hạn và pipeline ELK. Chỉ có runner
+GitHub được phép khởi tạo project này; báo cáo chi tiết được mã hóa bằng public
+certificate, private key giữ ngoài repository. Thành công của scanner không
+đồng nghĩa đạt toàn bộ 253 yêu cầu ASVS 5.0.0 L1/L2 hoặc qualification model.
+Cache CVE lạnh được khởi tạo qua feed chính thức của NIST, từ chối metadata cũ
+quá 48 giờ; ngưỡng dependency audit CVSS 7 không thay đổi. Hướng dẫn feed:
+[OWASP Dependency-Check](https://dependency-check.github.io/DependencyCheck/data/mirrornvd.html).
+
 Bản SIEM/SOC R2 đã được triển khai và nghiệm thu chức năng trong lab:
 
 - Một stack `flare-otp-local` phục vụ website, SOC và pipeline ELK, giữ nguyên
