@@ -60,6 +60,12 @@ at zero. A reservation consumes budget even if the fit fails. Smoke fits nothing
 Failed or completed fit/evaluation windows must not be replayed or replaced to
 chase a passing result. Inspect checkpoints before any continuation.
 
+If COLD capture is sealed but RAM admission prevents parity from starting,
+`cold-resume` continues with parity, selection and evaluation. It refuses a job
+with an existing parity execution log, COLD result directory, or COLD fit
+reservation. Every stage rechecks admission and can stop remaining registered
+ELK containers; thresholds and fit budgets remain unchanged.
+
 ## HTTP lab contract
 
 Only the isolated benchmark starts the loopback server; no host port is exposed

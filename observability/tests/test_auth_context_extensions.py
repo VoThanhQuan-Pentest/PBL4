@@ -76,6 +76,31 @@ class ExtensionMountTest(unittest.TestCase):
                              [s+'-'+cohort for s in ('capture','parity','select','evaluate')])
         self.assertEqual(campaign.process_identity(__import__('os').getpid()),
                          campaign.process_identity(__import__('os').getpid()))
+        self.assertEqual([name for name,_ in campaign.commands('cold-resume',job)],
+                         ['parity-cold','select-cold','evaluate-cold'])
+
+    def test_stage_readmission_only_stops_remaining_elk(self):
+        with tempfile.TemporaryDirectory() as folder:
+            window=Path(folder);before={'id':'original','image':'pinned'}
+            state={'stopped':list(campaign.ELK[:2]),'elk_before':{n:before for n in campaign.ELK}}
+            with patch.object(campaign.base,'available_memory',return_value=0), \
+                 patch.object(campaign,'inspect',return_value={'Id':'original','Image':'pinned'}), \
+                 patch.object(campaign.subprocess,'run') as run, \
+                 patch.object(campaign.time,'sleep'),patch.object(campaign.base,'resource_check') as guard:
+                campaign.admit_window(Path('/private/job'),window,state)
+                run.assert_called_once_with(['docker','stop','--time','30',campaign.ELK[2]],
+                    check=True,timeout=45,stdout=campaign.subprocess.DEVNULL)
+                guard.assert_called_once_with(Path('/private/job'),admission=True)
+                self.assertEqual(state['stopped'],list(campaign.ELK))
+
+    def test_resume_refuses_to_replay_an_attempted_cold_fit(self):
+        with tempfile.TemporaryDirectory() as folder:
+            job=Path(folder);(job/'corpus-cold').mkdir();(job/'ledger').mkdir()
+            (job/'corpus-cold/manifest.json').write_text(json.dumps({'status':'SOURCE_CAPTURE_COMPLETE','records':100000}))
+            (job/'ledger/classifier-COLD-A-42.json').write_text('{}')
+            with patch.object(campaign,'inspect') as inspect:
+                with self.assertRaises(RuntimeError):campaign.run_window(job,'cold-resume')
+                inspect.assert_not_called()
 
     def test_recovery_never_targets_an_unrelated_container(self):
         values=[{'Id':'owned','Name':'/auth-research-abc','Mounts':[{'Type':'bind','Source':'/private/job/classpath'}]},

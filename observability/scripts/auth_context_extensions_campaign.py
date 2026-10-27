@@ -144,14 +144,44 @@ def commands(kind, job):
             result += [('smoke-'+cohort.lower(), cmd('smoke', cohort)),
                        ('fault-'+cohort.lower(), cmd('fault', cohort))]
         return result
-    if kind in ('ready', 'cold'):
-        return [(s+'-'+kind, cmd(s, kind.upper())) for s in ('capture', 'parity', 'select', 'evaluate')]
+    if kind in ('ready', 'cold', 'cold-resume'):
+        cohort = 'cold' if kind == 'cold-resume' else kind
+        stages = ('parity', 'select', 'evaluate') if kind == 'cold-resume' else ('capture', 'parity', 'select', 'evaluate')
+        return [(s+'-'+cohort, cmd(s, cohort.upper())) for s in stages]
     if kind == 'http':
         return [('package', cmd('package')), ('http-test', cmd('http-test')), ('benchmark', cmd('benchmark'))]
     return [('soak', cmd('soak'))]
 
 
+def admit_window(job, window, state):
+    # Other applications can grow while a long capture is running. Re-admit
+    # between stages; never lower the threshold or target a protected container.
+    for name in ELK:
+        if base.available_memory() >= base.ADMISSION_MEMORY:
+            break
+        if name in state['stopped']:
+            continue
+        now = inspect(name); before = state['elk_before'][name]
+        if now['Id'] != before['id'] or now['Image'] != before['image']:
+            raise RuntimeError('ELK identity changed before temporary stop')
+        state['stopped'].append(name)
+        atomic(window/'maintenance.json', state)
+        print('TEMPORARY_STOP', name, flush=True)
+        subprocess.run(['docker', 'stop', '--time', '30', name], check=True, timeout=45,
+                       stdout=subprocess.DEVNULL)
+        time.sleep(2)
+    base.resource_check(job, admission=True)
+
+
 def run_window(job, kind):
+    if kind == 'cold-resume':
+        manifest = json.loads((job/'corpus-cold/manifest.json').read_bytes())
+        if (manifest.get('status') != 'SOURCE_CAPTURE_COMPLETE' or manifest.get('records') != 100000
+                or (job/'parity-cold-supervisor.log').exists()
+                or (job/'corpus-cold/producer-parity.json').exists()
+                or (job/'cold').exists()
+                or list((job/'ledger').glob('classifier-COLD-*.json'))):
+            raise RuntimeError('resume requires sealed capture and an unstarted parity/fit/evaluation')
     window = job/('window-'+kind)
     window.mkdir(mode=0o700)  # Never replay a failed or completed window.
     state = {'status': 'PREPARING', 'stopped': [], 'stages': [], 'started_at': time.time(),
@@ -171,21 +201,13 @@ def run_window(job, kind):
         raise KeyboardInterrupt()
     previous = {s: signal.signal(s, interrupted) for s in (signal.SIGTERM, signal.SIGINT)}
     try:
-        for name in ELK:
-            if base.available_memory() >= base.ADMISSION_MEMORY:
-                break
-            state['stopped'].append(name)
-            atomic(window/'maintenance.json', state)  # Journal intent before mutation.
-            print('TEMPORARY_STOP', name, flush=True)
-            subprocess.run(['docker', 'stop', '--time', '30', name], check=True, timeout=45,
-                           stdout=subprocess.DEVNULL)
-            time.sleep(2)
-        base.resource_check(job, admission=True)
+        admit_window(job, window, state)
         for name, args in commands(kind, job):
             if time.time() > state['deadline'] or (window/'recovery.json').exists():
                 raise RuntimeError('maintenance deadline or recovery triggered')
             state['phase'] = name; atomic(window/'maintenance.json', state)
             print('PHASE', name, flush=True)
+            admit_window(job, window, state)
             env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1', OPENBLAS_NUM_THREADS='1', OMP_NUM_THREADS='1')
             started = time.time()
             with (window/(name+'.log')).open('x') as log:
@@ -226,7 +248,7 @@ def run_window(job, kind):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('kind', choices=('smoke', 'ready', 'cold', 'http', 'soak', '_watchdog'))
+    p.add_argument('kind', choices=('smoke', 'ready', 'cold', 'cold-resume', 'http', 'soak', '_watchdog'))
     p.add_argument('--job', required=True, type=Path)
     p.add_argument('--allow-elk-maintenance', action='store_true')
     p.add_argument('--window', type=Path); p.add_argument('--pid', type=int); p.add_argument('--start')
