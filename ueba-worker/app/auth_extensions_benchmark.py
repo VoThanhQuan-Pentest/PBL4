@@ -84,8 +84,10 @@ def check_response(status,body,packets,expected):
         original=expected[result['snapshot_id']]
         if result['recommendation']!=original['recommendation'] or result['context']!=original['context']:
             raise ValueError('HTTP recommendation differs')
+        if (result['raw_score'] is None)!=(original['raw_score'] is None):raise ValueError('HTTP score availability differs')
         if result['raw_score'] is not None and not math.isclose(result['raw_score'],original['raw_score'],rel_tol=1e-12,abs_tol=1e-12):
             raise ValueError('HTTP score differs')
+        if result.get('diagnostics')!=original.get('diagnostics'):raise ValueError('HTTP diagnostics differ')
 
 
 def packet_batch(pool,size,offset):return [pool[(offset+i)%len(pool)] for i in range(size)]
@@ -105,6 +107,16 @@ def fault_tests(registry,packets):
         if status!=200 or body['assessments'][0]['recommendation']!='UNDETERMINED':raise ValueError('invalid item not isolated')
         if body['assessments'][1]['recommendation']!=expected[packets[1]['snapshot_id']]['recommendation']:raise ValueError('valid sibling lost')
         outcomes['missing_coverage']='PASS'
+        repeated=[deepcopy(packets[0]),deepcopy(packets[1])]
+        repeated[1]['snapshot_id']=repeated[0]['snapshot_id']
+        expectations=[expected_for(registry,[p]) for p in repeated]
+        barrier=threading.Barrier(2)
+        def concurrent_same_id(i):
+            barrier.wait(timeout=3)
+            status,body,_=request(url,[repeated[i]])
+            check_response(status,body,[repeated[i]],expectations[i])
+        with ThreadPoolExecutor(max_workers=2) as executor:list(executor.map(concurrent_same_id,range(2)))
+        outcomes['same_id_across_requests']='PASS'
         original=service.registry
         class Fault:
             mode='reverse'
@@ -202,9 +214,11 @@ def main():
     p=argparse.ArgumentParser();p.add_argument('stage',choices=('http-test','benchmark','soak'))
     for name in ('bundle','baseline','samples','output'):p.add_argument('--'+name,type=Path,required=True)
     a=p.parse_args();registry=ModelRegistry(a.bundle,a.baseline);pool=sample_packets(a.samples)
-    path=a.output/(a.stage+'-started.json');write_new(path,{'status':'RESERVED','bundle_sha256':sha(a.bundle),'at':time.time()})
+    code_hashes={p.name:sha(p) for p in sorted(Path(__file__).parent.glob('auth_extensions_*.py'))}
+    path=a.output/(a.stage+'-started.json');write_new(path,{'status':'RESERVED','bundle_sha256':sha(a.bundle),'code_sha256':code_hashes,'at':time.time()})
     result=fault_tests(registry,pool) if a.stage=='http-test' else benchmark(registry,pool) if a.stage=='benchmark' else soak(registry,pool)
-    result.update(scope='OFFLINE_RESEARCH_ONLY',bundle_sha256=sha(a.bundle),automatic_enforcement=False,strict_production_qualified=False)
+    result.update(scope='OFFLINE_RESEARCH_ONLY',bundle_sha256=sha(a.bundle),code_sha256=code_hashes,
+                  automatic_enforcement=False,strict_production_qualified=False)
     write_new(a.output/(a.stage+'-receipt.json'),result);print(json.dumps({k:v for k,v in result.items() if k!='samples'}),flush=True)
 
 

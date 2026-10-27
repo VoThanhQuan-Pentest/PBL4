@@ -258,6 +258,8 @@ def main():
         return
     if not a.allow_elk_maintenance:
         p.error('explicit maintenance authorization flag required')
+    if a.kind in ('http', 'soak') and (job/'http-review-barrier.json').exists():
+        p.error('HTTP review barrier present; model windows remain immutable')
     with (job/'campaign.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         run_window(job, a.kind)

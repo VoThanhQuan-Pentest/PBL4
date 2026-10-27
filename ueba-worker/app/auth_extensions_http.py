@@ -176,10 +176,16 @@ class BatchService:
         while True:
             await asyncio.sleep(0 if len(self.queue)>=32 else self.wait)
             if not self.queue:continue
-            mode=self.circuit.state();limit=1 if mode=='HALF_OPEN' else 32;items=[]
+            mode=self.circuit.state();limit=1 if mode=='HALF_OPEN' else 32;items=[];batch_ids=set()
             while self.queue and len(items)<limit:
-                item=self.queue.popleft()
-                if item['future'].done():self._release(item);continue
+                item=self.queue[0]
+                if item['future'].done():self.queue.popleft();self._release(item);continue
+                # IDs are unique inside an envelope, but can recur in another
+                # request. Keep them in separate batches so remapping a worker's
+                # reordered result cannot cross request boundaries.
+                identity=item['packet']['snapshot_id']
+                if identity in batch_ids:break
+                self.queue.popleft();batch_ids.add(identity)
                 item['inflight']=True;items.append(item)
             if not items:continue
             packets=[i['packet'] for i in items]

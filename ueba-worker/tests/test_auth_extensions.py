@@ -153,6 +153,18 @@ class FakeRegistry:
 
 
 class BatchTest(unittest.IsolatedAsyncioTestCase):
+    async def test_same_id_in_concurrent_requests_keeps_request_local_result(self):
+        class Registry:
+            def assess_batch(self,packets):
+                return [{'snapshot_id':p['snapshot_id'],'raw_score':p['marker']} for p in packets]
+        service=BatchService(Registry(),wait=.001)
+        await service.start()
+        try:
+            a,b=await asyncio.gather(service.submit([{'snapshot_id':'same-observation-01','marker':1}]),
+                                     service.submit([{'snapshot_id':'same-observation-01','marker':2}]))
+            self.assertEqual([a[0]['raw_score'],b[0]['raw_score']],[1,2])
+        finally:await service.close()
+
     async def asyncSetUp(self):
         self.registry=FakeRegistry();self.service=BatchService(self.registry,wait=.001)
         await self.service.start()

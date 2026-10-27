@@ -71,6 +71,8 @@ ELK containers; thresholds and fit budgets remain unchanged.
 Only the isolated benchmark starts the loopback server; no host port is exposed
 by Docker. `POST /lab/assess` accepts `{"snapshots": [...]}` with 1–32 schema-7
 snapshots. IDs must be unique within the request and are preserved in responses.
+Repeated IDs in concurrent requests are processed in separate internal batches,
+so each request retains its own result even when payloads differ.
 Malformed envelopes return 400; oversized bodies return 413. Invalid individual
 observations return `UNDETERMINED` while valid siblings continue. Capacity is 256
 pending items, with 503 on overload. Batch wait is at most 50 ms and the request
@@ -99,6 +101,9 @@ hashes, receipt identities, and producer findings. It always declares
 enforcement. Keep rejected models private and excluded from serving. Runtime
 integration additionally needs ASVS review of producer parity, trust/coverage,
 contract mapping, model allowlisting, rollback and production evaluation.
+HTTP qualification receipts bind their own implementation hashes separately
+from the frozen model-campaign receipts. A transport fix after model evaluation
+does not rerun or replace any model fit, calibration, or held-out evaluation.
 
 Acceptance receipts cover HTTP faults, nine batch/concurrency combinations,
 and a full 60-minute soak. Required gates are adapter batch-32 P95 ≤100 ms,

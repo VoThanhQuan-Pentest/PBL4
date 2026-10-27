@@ -102,6 +102,16 @@ class ExtensionMountTest(unittest.TestCase):
                 with self.assertRaises(RuntimeError):campaign.run_window(job,'cold-resume')
                 inspect.assert_not_called()
 
+    def test_http_review_barrier_prevents_a_queued_window(self):
+        import io
+        with tempfile.TemporaryDirectory() as folder:
+            job=Path(folder);(job/'http-review-barrier.json').write_text('{}')
+            with patch.object(campaign.base,'safe_path',return_value=job), \
+                 patch.object(sys,'argv',['campaign','http','--job',str(job),'--allow-elk-maintenance']), \
+                 patch.object(sys,'stderr',io.StringIO()),patch.object(campaign,'run_window') as run:
+                with self.assertRaises(SystemExit) as error:campaign.main()
+                self.assertEqual(error.exception.code,2);run.assert_not_called()
+
     def test_recovery_never_targets_an_unrelated_container(self):
         values=[{'Id':'owned','Name':'/auth-research-abc','Mounts':[{'Type':'bind','Source':'/private/job/classpath'}]},
                 {'Id':'other','Name':'/auth-research-def','Mounts':[{'Type':'bind','Source':'/private/other'}]},
