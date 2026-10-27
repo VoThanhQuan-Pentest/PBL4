@@ -110,6 +110,12 @@ def labels(split, smoke=False):
     return entries
 
 
+def same_protocol(expected, actual):
+    # JSON represents both tuples and lists as arrays. Compare the canonical
+    # wire representation while retaining every value and checksum binding.
+    return source.digest(expected) == source.digest(actual)
+
+
 def replace_account(value, old, new):
     if isinstance(value, dict):
         return {k: replace_account(v, old, new) for k, v in value.items()}
@@ -297,7 +303,8 @@ def parity(data, classpath, application_jar_sha256):
     budget(data, admission=True)
     manifest = json.loads((data / 'manifest.json').read_bytes())
     if sha(data / 'protocol.json') != manifest.get('protocol_sha256'): raise RuntimeError('protocol changed')
-    if protocol(classpath) != json.loads((data / 'protocol.json').read_bytes()): raise RuntimeError('extractor or generator changed')
+    if not same_protocol(protocol(classpath), json.loads((data / 'protocol.json').read_bytes())):
+        raise RuntimeError('extractor or generator changed')
     if set(manifest.get('splits', {})) != set(QUOTAS): raise RuntimeError('incomplete corpus splits')
     for split, entry in manifest.get('splits', {}).items():
         if split not in QUOTAS or entry['file'] != split + '.jsonl.gz' or entry['raw_file'] != split + '-raw.jsonl.gz':

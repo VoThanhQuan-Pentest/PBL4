@@ -1,7 +1,9 @@
 import sys
+import json
 import unittest
 from collections import Counter
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import auth_context_research_v2 as research
@@ -44,6 +46,14 @@ class ResearchCorpusTests(unittest.TestCase):
     def test_smoke_namespace_differs(self):
         self.assertNotEqual(research.frame('train', 0, 'routine', 'browse')[1]['episode_id'],
                             research.frame('train', 0, 'routine', 'browse', True)[1]['episode_id'])
+
+    def test_protocol_round_trip_preserves_identity_and_detects_changes(self):
+        with patch.object(research, 'classpath_fingerprint', return_value=[]):
+            original = research.protocol('unused')
+        restored = json.loads(json.dumps(original))
+        self.assertTrue(research.same_protocol(original, restored))
+        restored['maximum_classifier_fits'] = 5
+        self.assertFalse(research.same_protocol(original, restored))
 
     def test_capture_rejects_path_outside_research_root(self):
         with self.assertRaisesRegex(RuntimeError, 'research root'):
