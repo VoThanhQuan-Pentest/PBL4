@@ -115,7 +115,7 @@ Measured stage wall times, excluding ELK stop/recovery overhead:
 | COLD | 594 s | 158 s | 38 s | 10 s |
 
 The private job occupies about 967 MiB including corpora, classpath and evidence,
-below its 4 GiB quota. The deployable-shaped research bundle itself is 417,364
+below its 4 GiB quota. The research bundle itself is 417,364
 bytes (about 408 KiB); it remains blocked from runtime integration.
 
 The bundle stays `OFFLINE_RESEARCH_ONLY` with `runtime_integration_blocked: true`.
