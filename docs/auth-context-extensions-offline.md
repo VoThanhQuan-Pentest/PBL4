@@ -90,6 +90,10 @@ softmax and identify that method.
 `GET /lab/metrics` exposes only fixed-label counters and bounded histogram state.
 Drift is separated by cohort and operation, requires 1,000 valid observations,
 and needs two consecutive shifted windows. Coverage loss is reported separately.
+The lab streaming window closes every 1,000 attempts. If any attempts lack a valid
+observation, that window has fewer than 1,000 valid rows and reports insufficient
+data for drift; coverage reporting still works. Runtime integration must choose
+its own window policy explicitly rather than silently zero-filling missing rows.
 Simulation results are functional laboratory evidence, not a production false
 alarm guarantee. A nonpassing drift gate is preserved in the bundle metadata.
 
