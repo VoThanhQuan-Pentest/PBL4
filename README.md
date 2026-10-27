@@ -50,6 +50,12 @@ lần sai trong 300 giây theo tài khoản, yêu cầu mã mới cách nhau 60 
 mã mới, quay lại bước mật khẩu; không lưu mật khẩu, mã hoặc challenge trên disk.
 Tài khoản thiếu email phải được xử lý qua quy trình quản trị hiện có.
 
+Khi xác thực thành công, server cấp token mới và thu hồi phiên đang được trình
+duyệt/client gửi kèm. Bước mật khẩu đang chờ OTP hoặc OTP sai không thu hồi
+phiên hiện tại. Các thiết bị khác giữ phiên riêng; `logout-all` vẫn thu hồi
+toàn bộ. Việc xoay phiên bình thường không tạo bằng chứng replay sau một hành
+động thu hồi có chủ đích của SOC. JSON đăng nhập và trạng thái 202/200 giữ nguyên.
+
 Profile candidate HTTPS đặt `APP_SESSION_IDLE_SECONDS=900` và
 `APP_JWT_EXPIRATION_SECONDS=28800`: phiên cần đăng nhập lại sau 15 phút không
 có yêu cầu gắn tương tác gần đây, hoặc sau tối đa 8 giờ. Web chỉ gắn

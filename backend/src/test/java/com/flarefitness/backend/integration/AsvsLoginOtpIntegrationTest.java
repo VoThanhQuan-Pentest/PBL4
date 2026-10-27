@@ -46,6 +46,9 @@ class AsvsLoginOtpIntegrationTest extends ContainerizedIntegrationTest {
     @Autowired StringRedisTemplate redis;
     @Autowired Environment environment;
     @Autowired AuthService auth;
+    @Autowired com.flarefitness.backend.security.JwtTokenService jwt;
+    @Autowired com.flarefitness.backend.security.RedisTokenStore sessions;
+    @Autowired com.flarefitness.backend.service.siem.SiemSessionRevocationEvidence revocations;
     @MockitoBean JavaMailSender mail;
     private final Map<String, String> codes = new ConcurrentHashMap<>();
     private static final String PASSWORD = "Synthetic!LoginPassphrase1";
@@ -74,6 +77,27 @@ class AsvsLoginOtpIntegrationTest extends ContainerizedIntegrationTest {
                 .andExpect(status().isOk()).andReturn();
         assertThat(mapper.readTree(current.getResponse().getContentAsString()).path("id").asText()).isEqualTo(user.getId());
         assertThat(verify(challenge, codes.get(user.getEmail()), IP, AGENT).getResponse().getStatus()).isEqualTo(401);
+    }
+
+    @Test void onlySuccessfulOtpRetiresThePresentedSessionAndLeavesOtherDevicesIntact() throws Exception {
+        User user = fixture();
+        var previous = existingSession(user);
+        var otherDevice = existingSession(user);
+        Challenge challenge = begin(user, previous);
+        mvc.perform(get("/api/auth/me").cookie(previous)).andExpect(status().isOk());
+        String code = codes.get(user.getEmail());
+        String wrong = code.equals("000000") ? "000001" : "000000";
+        assertThat(verify(challenge, wrong, IP, AGENT, previous).getResponse().getStatus()).isEqualTo(401);
+        mvc.perform(get("/api/auth/me").cookie(previous)).andExpect(status().isOk());
+        MvcResult completed = verify(challenge, code, IP, AGENT, previous);
+        assertThat(completed.getResponse().getStatus()).isEqualTo(200);
+        var replacement = completed.getResponse().getCookie("access_token");
+        assertThat(replacement).isNotNull();
+        assertThat(replacement.getValue().equals(previous.getValue())).isFalse();
+        mvc.perform(get("/api/auth/me").cookie(previous)).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/auth/me").cookie(replacement)).andExpect(status().isOk());
+        mvc.perform(get("/api/auth/me").cookie(otherDevice)).andExpect(status().isOk());
+        assertThat(revocations.find(previous.getValue(), user.getId())).isNull();
     }
 
     @Test void concurrentVerificationCanIssueOnlyOneSession() throws Exception {
@@ -146,8 +170,8 @@ class AsvsLoginOtpIntegrationTest extends ContainerizedIntegrationTest {
                 .andExpect(status().isForbidden());
     }
 
-    private Challenge begin(User user) throws Exception {
-        MvcResult result = login(user, PASSWORD);
+    private Challenge begin(User user, jakarta.servlet.http.Cookie... existing) throws Exception {
+        MvcResult result = login(user, PASSWORD, existing);
         assertThat(result.getResponse().getStatus()).isEqualTo(202);
         assertThat(result.getResponse().getHeader("Set-Cookie")).isNull();
         var body = mapper.readTree(result.getResponse().getContentAsString());
@@ -156,19 +180,27 @@ class AsvsLoginOtpIntegrationTest extends ContainerizedIntegrationTest {
         assertThat(body.path("email_masked").asText()).doesNotContain(user.getUsername());
         return new Challenge(body.path("challenge_id").asText());
     }
-    private MvcResult login(User user, String password) throws Exception {
+    private MvcResult login(User user, String password, jakarta.servlet.http.Cookie... existing) throws Exception {
         String csrf = csrf();
-        return mvc.perform(post("/api/auth/login").with(request -> { request.setRemoteAddr(IP); return request; })
+        var builder = post("/api/auth/login").with(request -> { request.setRemoteAddr(IP); return request; })
                 .header("User-Agent", AGENT).cookie(new MockCookie("XSRF-TOKEN", csrf)).header("X-XSRF-TOKEN", csrf)
-                .contentType(MediaType.APPLICATION_JSON).content(mapper.writeValueAsString(Map.of("username", user.getUsername(), "password", password))))
-                .andReturn();
+                .contentType(MediaType.APPLICATION_JSON).content(mapper.writeValueAsString(Map.of("username", user.getUsername(), "password", password)));
+        if (existing.length > 0) builder.cookie(existing);
+        return mvc.perform(builder).andReturn();
     }
-    private MvcResult verify(Challenge challenge, String code, String ip, String agent) throws Exception {
+    private MvcResult verify(Challenge challenge, String code, String ip, String agent, jakarta.servlet.http.Cookie... existing) throws Exception {
         String csrf = csrf();
-        return mvc.perform(post("/api/auth/login/otp").with(request -> { request.setRemoteAddr(ip); return request; })
+        var builder = post("/api/auth/login/otp").with(request -> { request.setRemoteAddr(ip); return request; })
                 .header("User-Agent", agent).cookie(new MockCookie("XSRF-TOKEN", csrf)).header("X-XSRF-TOKEN", csrf)
-                .contentType(MediaType.APPLICATION_JSON).content(mapper.writeValueAsString(Map.of("challenge_id", challenge.id(), "otp_code", code))))
-                .andReturn();
+                .contentType(MediaType.APPLICATION_JSON).content(mapper.writeValueAsString(Map.of("challenge_id", challenge.id(), "otp_code", code)));
+        if (existing.length > 0) builder.cookie(existing);
+        return mvc.perform(builder).andReturn();
+    }
+
+    private MockCookie existingSession(User user) {
+        String token = jwt.generateToken(new com.flarefitness.backend.security.CurrentUserPrincipal(user));
+        sessions.save(token, user.getUsername(), 3600);
+        return new MockCookie("access_token", token);
     }
     private String csrf() throws Exception {
         return mapper.readTree(mvc.perform(get("/api/auth/csrf")).andReturn().getResponse().getContentAsString()).path("token").asText();

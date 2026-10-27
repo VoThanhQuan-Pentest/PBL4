@@ -293,6 +293,12 @@ public class AuthService {
         if(sessionRevocationEvidence!=null)try{sessionRevocationEvidence.record(token,false);}catch(RuntimeException telemetryFailure){LOGGER.warn("Session revoke evidence unavailable; authentication remains revoked.");}
     }
 
+    public void retirePreviousSession(String token) {
+        // Successful authentication is already audited. A request racing normal
+        // session rotation is not evidence of replay after deliberate SOC revocation.
+        redisTokenStore.revoke(token);
+    }
+
     public void logoutAll(String username) {
         redisTokenStore.revokeAll(username);
         if(sessionRevocationEvidence!=null&&org.springframework.web.context.request.RequestContextHolder.getRequestAttributes() instanceof org.springframework.web.context.request.ServletRequestAttributes request){

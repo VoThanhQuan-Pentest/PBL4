@@ -61,7 +61,7 @@ public class AuthController {
                     ipAddressResolver.resolve(httpServletRequest), httpServletRequest.getHeader("User-Agent")));
         }
         return loginResponse(authService.login(request, ipAddressResolver.resolve(httpServletRequest),
-                httpServletRequest.getHeader("User-Agent")));
+                httpServletRequest.getHeader("User-Agent")), httpServletRequest);
     }
 
     @PostMapping("/login/otp")
@@ -69,7 +69,7 @@ public class AuthController {
             @Valid @RequestBody com.flarefitness.backend.dto.auth.LoginOtpRequest request,
             HttpServletRequest servletRequest) {
         return loginResponse(loginOtpService.verify(request, ipAddressResolver.resolve(servletRequest),
-                servletRequest.getHeader("User-Agent")));
+                servletRequest.getHeader("User-Agent")), servletRequest);
     }
 
     @GetMapping("/csrf")
@@ -78,8 +78,9 @@ public class AuthController {
     }
 
     @PostMapping("/register")
-    public ResponseEntity<LoginResponse> register(@Valid @RequestBody RegisterRequest request) {
-        return loginResponse(authService.register(request));
+    public ResponseEntity<LoginResponse> register(@Valid @RequestBody RegisterRequest request,
+            HttpServletRequest servletRequest) {
+        return loginResponse(authService.register(request), servletRequest);
     }
 
     @PostMapping("/register/otp")
@@ -140,7 +141,13 @@ public class AuthController {
         return ResponseEntity.noContent().build();
     }
 
-    private ResponseEntity<LoginResponse> loginResponse(LoginResponse response) {
+    private ResponseEntity<LoginResponse> loginResponse(LoginResponse response, HttpServletRequest request) {
+        // Retire only the authenticated session presented with this successful
+        // authentication. Pending/failed OTP proofs and other devices stay intact.
+        Object previous = request.getAttribute(JwtAuthenticationFilter.CURRENT_TOKEN_REQUEST_ATTRIBUTE);
+        if (previous instanceof String token && !token.isBlank() && !token.equals(response.accessToken())) {
+            authService.retirePreviousSession(token);
+        }
         ResponseCookie cookie = ResponseCookie.from(cookieName, response.accessToken())
                 .httpOnly(true)
                 .secure(cookieSecure)
