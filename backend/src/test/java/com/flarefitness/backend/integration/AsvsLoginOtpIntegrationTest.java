@@ -152,11 +152,7 @@ class AsvsLoginOtpIntegrationTest extends ContainerizedIntegrationTest {
         User user = fixture(); user.setEmail(null); users.saveAndFlush(user);
         MvcResult result = login(user, PASSWORD);
         assertThat(result.getResponse().getStatus()).isEqualTo(401);
-        // Existing authenticated clients may receive CSRF-cookie rotation here;
-        // the password-only step must never issue an authentication cookie.
-        assertThat(result.getResponse().getCookie("access_token")).isNull();
-        assertThat(result.getResponse().getHeaders("Set-Cookie"))
-                .noneMatch(header -> header.startsWith("access_token="));
+        assertThat(result.getResponse().getHeader("Set-Cookie")).isNull();
         assertThat(codes).isEmpty();
     }
 
@@ -177,7 +173,11 @@ class AsvsLoginOtpIntegrationTest extends ContainerizedIntegrationTest {
     private Challenge begin(User user, jakarta.servlet.http.Cookie... existing) throws Exception {
         MvcResult result = login(user, PASSWORD, existing);
         assertThat(result.getResponse().getStatus()).isEqualTo(202);
-        assertThat(result.getResponse().getHeader("Set-Cookie")).isNull();
+        // Existing authenticated clients may receive CSRF-cookie rotation here;
+        // the password-only step must never issue an authentication cookie.
+        assertThat(result.getResponse().getCookie("access_token")).isNull();
+        assertThat(result.getResponse().getHeaders("Set-Cookie"))
+                .noneMatch(header -> header.startsWith("access_token="));
         var body = mapper.readTree(result.getResponse().getContentAsString());
         assertThat(body.has("access_token")).isFalse();
         assertThat(body.path("expires_in").asLong()).isEqualTo(300);
