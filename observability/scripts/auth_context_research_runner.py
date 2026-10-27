@@ -219,6 +219,19 @@ def run(stage: str, job: Path, classpath: str | None = None, jar_sha: str | None
     resource_check(job, admission=True)
     name = 'auth-research-' + uuid.uuid4().hex
     args = container_command(stage, job, classpath, jar_sha, name)
+    return run_command(args,job,stage,fit_result=job/'result' if stage=='select' else None)
+
+
+def run_command(args,job,stage,*,fit_result=None):
+    """Shared supervisor for registered research adapters, never a shell command."""
+    job=safe_path(job,RESEARCH_ROOT)
+    if not job.is_dir() or job.stat().st_uid!=os.getuid() or job.stat().st_mode&0o077:
+        raise ValueError('owner-only research job directory required')
+    if not re.fullmatch('[a-z0-9-]{1,64}',stage) or args[:2]!=['docker','run']:
+        raise ValueError('registered Docker stage required')
+    name=args[args.index('--name')+1]
+    if not re.fullmatch('auth-research-[a-f0-9]{32}',name):raise ValueError('private container identity required')
+    resource_check(job,admission=True)
     log_path = job / (stage + '-supervisor.log')
     receipt_path = job / (stage + '-supervisor.json')
     started = time.monotonic()
@@ -240,8 +253,8 @@ def run(stage: str, job: Path, classpath: str | None = None, jar_sha: str | None
                         resource_check(job, admission=False)
                         if now - started > MAX_SECONDS:
                             raise RuntimeError('STOP_RESOURCE: stage deadline exceeded')
-                        if stage == 'select':
-                            check_fit_deadlines(job / 'result', first_seen, now)
+                        if fit_result is not None:
+                            check_fit_deadlines(fit_result, first_seen, now)
                     except (RuntimeError, ValueError) as error:
                         failure = str(error)
                         break
