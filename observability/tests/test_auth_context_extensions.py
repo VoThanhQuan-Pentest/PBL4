@@ -13,6 +13,24 @@ import auth_context_extensions_campaign as campaign
 
 
 class ExtensionSourceTest(unittest.TestCase):
+    def test_all_context_families_obey_split_time_and_history_boundaries(self):
+        previous_end=None
+        for split,anchor in source.ANCHORS.items():
+            if previous_end is not None:
+                self.assertGreaterEqual((anchor-previous_end).days,14)
+            previous_end=anchor+source.timedelta(days=3)
+            for cohort in ('READY','COLD'):
+                for family in ('routine','case3','case4','case5','operational'):
+                    for stratum in range(3):
+                        raw,meta=source.frame(cohort,split,17+stratum,family,'browse' if family=='routine' else family,stratum)
+                        attempt=source.at(raw['attempt']['event_timestamp'])
+                        self.assertLessEqual(anchor,attempt);self.assertLess(attempt,previous_end)
+                        self.assertTrue(all(source.at(e['event_timestamp'])<attempt for e in raw['context']))
+                        start=attempt.replace(minute=0,second=0,microsecond=0)
+                        self.assertTrue(all(source.at(h['window_start'])<start for h in raw['baseline_frames']))
+                        self.assertEqual(meta['family'],family)
+                        self.assertNotIn('context_label',raw)
+
     def test_namespaces_cohorts_and_current_window_history_are_coherent(self):
         identities=set()
         for cohort in ('READY','COLD'):
