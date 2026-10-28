@@ -22,6 +22,9 @@ candidate đang kiểm chứng CI; các phiên bản này chưa thay thế stack
 nghiệm thu bên dưới. CI có tùy chọn `cold_cache` khi chạy thủ công, worker dùng
 test image riêng và JavaFX được kiểm thử dưới Xvfb trước khi mở executable đã
 đóng gói ở 1366×768 và 1920×1080. Dependency audit và coverage vẫn là gate bắt buộc.
+Chính sách [bảo trì dependency của candidate lab](security/dependency-maintenance.md)
+quy định thời hạn triage/khắc phục theo rủi ro và ngoại lệ có ngày hết hạn.
+Việc có chính sách chưa chứng minh mọi phiên bản hiện tại đáp ứng các hạn đó.
 
 Workflow **CI** có tùy chọn chạy thủ công `runtime_validation`: kiểm tra restart,
 chuyển backend baseline/candidate tuần tự trên database tổng hợp rồi quan sát
