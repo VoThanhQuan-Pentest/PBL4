@@ -22,10 +22,13 @@ import com.flarefitness.backend.service.VoucherPricingService;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
@@ -50,13 +53,14 @@ class CommerceContentionIntegrationTest extends ContainerizedIntegrationTest {
     @Autowired private PromoHuntService promotions;
     @Autowired private JdbcTemplate jdbc;
     @Autowired private PlatformTransactionManager transactions;
+    private final Map<String, String> fixturePhones = new ConcurrentHashMap<>();
 
     @Test
     void twoCustomersCannotPurchaseTheSameLastStockUnit() throws Exception {
         Product product = product(1);
         User first = customer(), second = customer();
-        race(() -> orders.createOrder(auth(first), request(product, null)),
-                () -> orders.createOrder(auth(second), request(product, null)), "khong du ton kho");
+        race(() -> orders.createOrder(auth(first), request(first, product, null)),
+                () -> orders.createOrder(auth(second), request(second, product, null)), "khong du ton kho");
 
         assertThat(products.findById(product.getId()).orElseThrow().getTonKho()).isZero();
         assertThat(count("SELECT COUNT(*) FROM tbl_chi_tiet_don_hang WHERE product_id=?", product.getId()))
@@ -72,8 +76,8 @@ class CommerceContentionIntegrationTest extends ContainerizedIntegrationTest {
         Voucher voucher = voucher();
         pricing.grantVoucher(user, voucher.getCode(), 1);
         // Both valid order parents are committed before competing at the voucher boundary.
-        String first = orders.createOrder(auth(user), request(product, null)).id();
-        String second = orders.createOrder(auth(user), request(product, null)).id();
+        String first = orders.createOrder(auth(user), request(user, product, null)).id();
+        String second = orders.createOrder(auth(user), request(user, product, null)).id();
         race(() -> pricing.applyVoucher(user, voucher.getCode(), product.getGiaBan(), List.of(product), first),
                 () -> pricing.applyVoucher(user, voucher.getCode(), product.getGiaBan(), List.of(product), second),
                 "het luot su dung");
@@ -111,7 +115,7 @@ class CommerceContentionIntegrationTest extends ContainerizedIntegrationTest {
     void invalidVoucherRollsBackReservedStockAndOrderParent() {
         User user = customer();
         Product product = product(1);
-        assertThatThrownBy(() -> orders.createOrder(auth(user), request(product, "MISSING-" + id())))
+        assertThatThrownBy(() -> orders.createOrder(auth(user), request(user, product, "MISSING-" + id())))
                 .isInstanceOf(BadRequestException.class).hasMessageContaining("khong ton tai");
         assertThat(products.findById(product.getId()).orElseThrow().getTonKho()).isEqualTo(1);
         assertThat(count("SELECT COUNT(*) FROM tbl_don_hang WHERE user_id=?", user.getId())).isZero();
@@ -163,6 +167,12 @@ class CommerceContentionIntegrationTest extends ContainerizedIntegrationTest {
         user.setRole("CUSTOMER"); user.setHoTen("ASVS contention fixture");
         user.setEmail(id() + "@example.test"); user.setStatus("ACTIVE");
         user.setCreatedAt(LocalDateTime.now());
+        String phone;
+        do {
+            phone = "09" + String.format(java.util.Locale.ROOT, "%08d", ThreadLocalRandom.current().nextInt(100_000_000));
+        } while (fixturePhones.containsValue(phone)
+                || count("SELECT COUNT(*) FROM tbl_khach_hang WHERE sdt=? AND is_deleted=0", phone) != 0);
+        fixturePhones.put(user.getId(), phone);
         return users.saveAndFlush(user);
     }
 
@@ -184,9 +194,9 @@ class CommerceContentionIntegrationTest extends ContainerizedIntegrationTest {
         return vouchers.saveAndFlush(voucher);
     }
 
-    private OrderRequest request(Product product, String voucher) {
+    private OrderRequest request(User user, Product product, String voucher) {
         return new OrderRequest(null, null, null, null, null, null, null, voucher, null,
-                new OrderAddressPayload(null, "Fixture customer", "0901234567", "1 Fixture Road",
+                new OrderAddressPayload(null, "Fixture customer", fixturePhones.get(user.getId()), "1 Fixture Road",
                         null, "Fixture Ward", null, "Fixture Province", null),
                 List.of(new OrderItemPayload(product.getId(), null, null, null, null, null, null, 1, null, null)));
     }
