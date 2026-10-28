@@ -10,6 +10,18 @@ def run(*args, **kwargs):
     subprocess.run(args, check=True, capture_output=True, **kwargs)
 
 
+def _generate_certificates(root):
+    # ASVS 5.0.0-11.2.3: RSA-3072 provides the required 128-bit security strength.
+    run('openssl', 'req', '-x509', '-newkey', 'rsa:3072', '-nodes', '-sha256', '-days', '1',
+        '-subj', '/CN=ASVS isolated test CA', '-keyout', str(root/'ca.key'), '-out', str(root/'ca.crt'))
+    run('openssl', 'req', '-newkey', 'rsa:3072', '-nodes', '-sha256', '-subj', '/CN=app.soc.test',
+        '-addext', 'subjectAltName=DNS:app.soc.test,DNS:attacker.test',
+        '-keyout', str(root/'server.key'), '-out', str(root/'server.csr'))
+    run('openssl', 'x509', '-req', '-in', str(root/'server.csr'), '-CA', str(root/'ca.crt'),
+        '-CAkey', str(root/'ca.key'), '-CAcreateserial', '-days', '1', '-sha256',
+        '-copy_extensions', 'copy', '-out', str(root/'server.crt'))
+
+
 def main():
     require_ci_scope()
     root = Path(os.environ['ASVS_TLS_DIR']).resolve()
@@ -19,14 +31,7 @@ def main():
     root.mkdir(mode=0o700)
     previous = os.umask(0o077)
     try:
-        run('openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-sha256', '-days', '1',
-            '-subj', '/CN=ASVS isolated test CA', '-keyout', str(root/'ca.key'), '-out', str(root/'ca.crt'))
-        run('openssl', 'req', '-newkey', 'rsa:2048', '-nodes', '-sha256', '-subj', '/CN=app.soc.test',
-            '-addext', 'subjectAltName=DNS:app.soc.test,DNS:attacker.test',
-            '-keyout', str(root/'server.key'), '-out', str(root/'server.csr'))
-        run('openssl', 'x509', '-req', '-in', str(root/'server.csr'), '-CA', str(root/'ca.crt'),
-            '-CAkey', str(root/'ca.key'), '-CAcreateserial', '-days', '1', '-sha256',
-            '-copy_extensions', 'copy', '-out', str(root/'server.crt'))
+        _generate_certificates(root)
         # Container101 gets only its server key, never the CA private key.
         run('sudo', 'chown', '101:101', str(root/'server.key'))
         run('sudo', 'chmod', '0600', str(root/'server.key'))

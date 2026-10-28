@@ -336,6 +336,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Test disposable TLS key strength and local installer denial
+        run: python3 -m unittest discover -s scripts/security -p 'test_prepare_ci_tls.py' -v
       - name: Generate ephemeral PKI and product keystores
         run: observability/scripts/bootstrap-secrets.sh
       - name: Lint observability shell entrypoints
