@@ -2,15 +2,18 @@ package com.flarefitness.backend.security;
 
 import com.flarefitness.backend.exception.BadRequestException;
 import com.flarefitness.backend.entity.User;
+import java.security.SecureRandom;
 import java.time.Duration;
+import java.util.Base64;
 import java.util.Locale;
-import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 @Service
 public class PasswordResetTokenStore {
+
+    private static final SecureRandom RANDOM = new SecureRandom();
 
     private final StringRedisTemplate redisTemplate;
     private final String tokenPrefix;
@@ -27,7 +30,9 @@ public class PasswordResetTokenStore {
     }
 
     public String issue(User user) {
-        String token = UUID.randomUUID().toString();
+        byte[] entropy = new byte[32];
+        RANDOM.nextBytes(entropy);
+        String token = Base64.getUrlEncoder().withoutPadding().encodeToString(entropy);
         redisTemplate.opsForValue().set(key(token), binding(user), Duration.ofSeconds(ttlSeconds));
         return token;
     }

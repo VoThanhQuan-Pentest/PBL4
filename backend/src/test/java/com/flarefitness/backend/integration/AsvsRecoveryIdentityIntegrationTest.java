@@ -16,12 +16,16 @@ import com.flarefitness.backend.security.PasswordResetTokenStore;
 import com.flarefitness.backend.service.AdminService;
 import com.flarefitness.backend.service.AuthService;
 import java.time.LocalDateTime;
+import java.time.Duration;
+import java.util.Base64;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.env.Environment;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
@@ -37,6 +41,8 @@ class AsvsRecoveryIdentityIntegrationTest extends ContainerizedIntegrationTest {
     @Autowired AdminService admin;
     @Autowired PasswordResetTokenStore grants;
     @Autowired PasswordEncoder encoder;
+    @Autowired StringRedisTemplate redis;
+    @Autowired Environment environment;
     @MockitoBean JavaMailSender mail;
     private final ConcurrentHashMap<String, String> codes = new ConcurrentHashMap<>();
     private static final String OLD = "AsvsOwner!Password1";
@@ -58,10 +64,24 @@ class AsvsRecoveryIdentityIntegrationTest extends ContainerizedIntegrationTest {
         auth.sendForgotPasswordOtp(new OtpRequest(null, owner.getEmail(), null), "192.0.2.71");
         String code = codes.get(owner.getEmail()); assertThat(code).isNotNull();
         String token = auth.verifyForgotPasswordOtp(new ForgotPasswordOtpVerifyRequest(owner.getEmail(), code)).resetToken();
+        assertThat(token).hasSize(43).matches("[A-Za-z0-9_-]{43}");
+        assertThat(Base64.getUrlDecoder().decode(token)).hasSize(32);
         reset(owner.getEmail(), token);
         User changed = users.findActiveById(owner.getId()).orElseThrow();
         assertThat(encoder.matches(NEW, changed.getPassword())).isTrue();
         assertThat(changed.getAuthVersion()).isEqualTo(owner.getAuthVersion() + 1);
+        assertThatThrownBy(() -> reset(owner.getEmail(), token)).isInstanceOf(BadRequestException.class);
+    }
+
+    @Test void anUnexpiredAccountBoundUuidGrantSurvivesTheGeneratorUpgrade() {
+        User owner = user(null, "Nhan vien");
+        String token = UUID.randomUUID().toString();
+        String prefix = environment.getRequiredProperty("app.security.password-reset-token-prefix");
+        assertThat(prefix).startsWith(environment.getRequiredProperty("flare.test.redis-namespace"));
+        redis.opsForValue().set(prefix + com.flarefitness.backend.security.TokenFingerprint.sha256(token),
+                "v2:" + PasswordResetTokenStore.recoveryScope(owner), Duration.ofSeconds(300));
+        reset(owner.getEmail(), token);
+        assertThat(encoder.matches(NEW, users.findActiveById(owner.getId()).orElseThrow().getPassword())).isTrue();
         assertThatThrownBy(() -> reset(owner.getEmail(), token)).isInstanceOf(BadRequestException.class);
     }
 

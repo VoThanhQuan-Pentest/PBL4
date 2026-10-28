@@ -79,6 +79,12 @@ giữ nguyên. Khi chuyển binary mới, mã plaintext còn đang chờ sẽ kh
 chấp nhận; người dùng yêu cầu mã mới sau cooldown. Không đổi tài khoản, mật
 khẩu, cấu hình OTP/mail hoặc dữ liệu lịch sử để thực hiện nâng cấp này.
 
+Token đặt lại mật khẩu là chuỗi opaque: client chỉ giữ tạm và gửi lại nguyên
+chuỗi, không phân tích UUID. Token mới được tạo từ 32 byte `SecureRandom`, mã
+hóa Base64url không padding (43 ký tự). Redis tiếp tục lưu fingerprint với TTL
+và binding tài khoản hiện có; token UUID đã cấp có binding hợp lệ vẫn dùng được
+một lần trong thời hạn còn lại. Không có migration hoặc reset credential.
+
 Chính sách mật khẩu mới dùng chung cho đăng ký, đổi/khôi phục và quản trị tạo/
 đổi mật khẩu: 12–128 ký tự Unicode, cho phép passphrase và giữ nguyên khoảng
 trắng/chữ hoa thường. Không reset hay bắt đổi mật khẩu định kỳ. Riêng hash

@@ -9,6 +9,7 @@ import com.flarefitness.backend.entity.User;
 import com.flarefitness.backend.exception.BadRequestException;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.Base64;
 import java.util.concurrent.ConcurrentHashMap;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -40,11 +41,32 @@ class PasswordResetTokenStoreTest {
 
     @Test void issuedGrantStoresOnlyTokenAndIdentityFingerprintsWithTheConfiguredTtl() {
         String token = tokenStore.issue(user("account-a"));
+        assertThat(token).hasSize(43).matches("[A-Za-z0-9_-]{43}");
+        assertThat(Base64.getUrlDecoder().decode(token)).hasSize(32);
         String key = "auth:password-reset:" + TokenFingerprint.sha256(token);
         assertThat(storage).containsKey(key);
         assertThat(key).doesNotContain(token);
         assertThat(storage.get(key)).matches("v2:[0-9a-f]{64}").doesNotContain("person@example.test");
         verify(values).set(eq(key), any(String.class), eq(Duration.ofSeconds(300)));
+    }
+
+    @Test void independentFreshGrantsRemainDistinctAndIndividuallySingleUse() {
+        User owner = user("account-a");
+        String first = tokenStore.issue(owner), second = tokenStore.issue(owner);
+        assertThat(first).isNotEqualTo(second);
+        tokenStore.consume(owner, first);
+        assertThatThrownBy(() -> tokenStore.consume(owner, first)).isInstanceOf(BadRequestException.class);
+        tokenStore.consume(owner, second);
+        assertThatThrownBy(() -> tokenStore.consume(owner, second)).isInstanceOf(BadRequestException.class);
+    }
+
+    @Test void accountBoundUuidGrantsAlreadyInStorageStillWorkOnce() {
+        User owner = user("account-a");
+        String token = java.util.UUID.randomUUID().toString();
+        storage.put("auth:password-reset:" + TokenFingerprint.sha256(token),
+                "v2:" + PasswordResetTokenStore.recoveryScope(owner));
+        tokenStore.consume(owner, token);
+        assertThatThrownBy(() -> tokenStore.consume(owner, token)).isInstanceOf(BadRequestException.class);
     }
 
     @Test void freshGrantWorksOnceForTheSameIdentityAndNormalizedContact() {
