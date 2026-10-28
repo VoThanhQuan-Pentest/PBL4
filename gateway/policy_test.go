@@ -324,6 +324,70 @@ func TestManagementChannelKeepsRecoveryRoutesWhenClientIsBlocked(t *testing.T) {
 	}
 }
 
+func TestManagementChannelForwardsOtpAndPreservesBackendSecurityStatus(t *testing.T) {
+	const payload = `{"challenge_id":"synthetic-challenge","otp_code":"123456"}`
+	const responseBody = `{"fixture":"backend-response"}`
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body, err := io.ReadAll(request.Body)
+		if err != nil || string(body) != payload || request.Method != http.MethodPost ||
+			request.URL.Path != "/api/auth/login/otp" ||
+			request.Header.Get("X-XSRF-TOKEN") != "fixture-csrf" ||
+			request.Header.Get("Cookie") != "access_token=fixture-current-session" {
+			t.Error("OTP request contract was changed before reaching the backend")
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		status := http.StatusOK
+		switch request.URL.Query().Get("fixture") {
+		case "unauthorized":
+			status = http.StatusUnauthorized
+		case "forbidden":
+			status = http.StatusForbidden
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(status)
+		_, _ = io.WriteString(writer, responseBody)
+	}))
+	defer upstream.Close()
+	gateway, err := newServer(upstream.URL, "", "", io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	management := httptest.NewServer(http.HandlerFunc(gateway.ServeManagementHTTP))
+	defer management.Close()
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusOK} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			fixture := strings.ToLower(http.StatusText(status))
+			request, err := http.NewRequest(http.MethodPost, management.URL+"/api/auth/login/otp?fixture="+fixture, strings.NewReader(payload))
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("X-XSRF-TOKEN", "fixture-csrf")
+			request.Header.Set("Cookie", "access_token=fixture-current-session")
+			response, err := http.DefaultClient.Do(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			body, err := io.ReadAll(response.Body)
+			if err != nil || response.StatusCode != status || string(body) != responseBody {
+				t.Fatalf("backend OTP response was not preserved: status=%d expected=%d", response.StatusCode, status)
+			}
+		})
+	}
+	for _, path := range []string{"/api/auth/register", "/api/auth/forgot-password/otp"} {
+		response, err := http.Post(management.URL+path, "application/json", strings.NewReader("{}"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != http.StatusNotFound {
+			t.Fatalf("unrelated auth route became available: %s status=%d", path, response.StatusCode)
+		}
+	}
+}
+
 func TestGatewayOverwritesClientControlledForwardingHeaders(t *testing.T) {
 	var forwarded, realIP, trace string
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

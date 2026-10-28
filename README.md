@@ -50,6 +50,10 @@ lần sai trong 300 giây theo tài khoản, yêu cầu mã mới cách nhau 60 
 mã mới, quay lại bước mật khẩu; không lưu mật khẩu, mã hoặc challenge trên disk.
 Tài khoản thiếu email phải được xử lý qua quy trình quản trị hiện có.
 
+Cổng SOC/recovery `8089` chuyển tiếp cả bước mật khẩu và bước xác minh OTP.
+Backend vẫn kiểm tra CSRF, mã OTP và quyền; kênh này giữ nguyên lỗi 401/403 từ
+backend và không mở thêm luồng đăng ký hoặc khôi phục mật khẩu.
+
 Khi xác thực thành công, server cấp token mới và thu hồi phiên đang được trình
 duyệt/client gửi kèm. Bước mật khẩu đang chờ OTP hoặc OTP sai không thu hồi
 phiên hiện tại. Các thiết bị khác giữ phiên riêng; `logout-all` vẫn thu hồi

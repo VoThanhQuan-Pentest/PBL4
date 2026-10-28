@@ -306,6 +306,7 @@ func (s *server) policyVersion() int64 {
 func (s *server) ServeManagementHTTP(writer http.ResponseWriter, request *http.Request) {
 	path := request.URL.Path
 	allowed := path == "/api/auth/csrf" || path == "/api/auth/login" ||
+		path == "/api/auth/login/otp" ||
 		path == "/api/auth/logout" || path == "/api/health" ||
 		strings.HasPrefix(path, "/api/siem/")
 	if !allowed {
