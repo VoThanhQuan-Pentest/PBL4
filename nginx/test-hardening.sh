@@ -67,6 +67,10 @@ assert_security_headers() {
     printf 'CSP frame-ancestors policy is missing on %s\n' "$target" >&2
     exit 1
   fi
+  if ! printf '%s\n' "$response" | grep -qi "^Content-Security-Policy:.*base-uri 'none'"; then
+    printf 'CSP base-uri policy is missing on %s\n' "$target" >&2
+    exit 1
+  fi
   if ! printf '%s\n' "$response" | grep -qi '^Strict-Transport-Security:.*max-age='; then
     printf 'HSTS max-age is missing on %s\n' "$target" >&2
     exit 1
@@ -94,6 +98,13 @@ assert_security_headers "$index_response" /index.html
 assert_security_headers "$asset_response" /assets/svg/twitter.svg
 assert_security_headers "$api_response" /api/health
 assert_security_headers "$spoof_response" HTTPS-redirect
+
+for response in "$root_response" "$index_response" "$spoof_response"; do
+  if ! printf '%s\n' "$response" | grep -qi '^Content-Type: text/html; charset=utf-8'; then
+    printf '%s\n' 'HTML response must declare its UTF-8 charset' >&2
+    exit 1
+  fi
+done
 
 if ! printf '%s\n' "$spoof_response" | grep -q '^HTTP/.* 301'; then
   printf 'An untrusted X-Forwarded-Proto header bypassed the HTTPS redirect\n' >&2

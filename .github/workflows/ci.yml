@@ -310,6 +310,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Test candidate TLS ciphers, headers and edge-generated errors
+        run: python3 -m unittest discover -s scripts/security -p 'test_tls_edge.py' -v
       - name: Validate Compose interpolation
         run: sh scripts/verify-compose-hardening.sh
       - name: Exercise Docker ownership and logrotate regressions

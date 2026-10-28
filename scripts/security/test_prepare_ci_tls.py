@@ -31,7 +31,8 @@ class DisposableTlsTest(unittest.TestCase):
                 self.assertIn(b'Public-Key: (3072 bit)', details)
                 self.assertIn(b'sha256WithRSAEncryption', details)
                 self.assertEqual(0o600, stat.S_IMODE((root/f'{name}.key').stat().st_mode))
-            self.openssl('verify', '-CAfile', str(root/'ca.crt'), str(root/'server.crt'))
+            self.openssl('verify', '-x509_strict', '-purpose', 'sslserver',
+                         '-CAfile', str(root/'ca.crt'), str(root/'server.crt'))
             for host in ('app.soc.test', 'attacker.test'):
                 self.openssl('verify', '-CAfile', str(root/'ca.crt'),
                              '-verify_hostname', host, str(root/'server.crt'))

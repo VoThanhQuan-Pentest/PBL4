@@ -13,13 +13,23 @@ def run(*args, **kwargs):
 def _generate_certificates(root):
     # ASVS 5.0.0-11.2.3: RSA-3072 provides the required 128-bit security strength.
     run('openssl', 'req', '-x509', '-newkey', 'rsa:3072', '-nodes', '-sha256', '-days', '1',
+        '-addext', 'basicConstraints=critical,CA:TRUE',
+        '-addext', 'keyUsage=critical,keyCertSign,cRLSign',
+        '-addext', 'subjectKeyIdentifier=hash',
         '-subj', '/CN=ASVS isolated test CA', '-keyout', str(root/'ca.key'), '-out', str(root/'ca.crt'))
     run('openssl', 'req', '-newkey', 'rsa:3072', '-nodes', '-sha256', '-subj', '/CN=app.soc.test',
         '-addext', 'subjectAltName=DNS:app.soc.test,DNS:attacker.test',
         '-keyout', str(root/'server.key'), '-out', str(root/'server.csr'))
+    extensions = root/'server.ext'
+    extensions.write_text('basicConstraints=critical,CA:FALSE\n'
+                          'keyUsage=critical,digitalSignature,keyEncipherment\n'
+                          'extendedKeyUsage=serverAuth\n'
+                          'subjectAltName=DNS:app.soc.test,DNS:attacker.test\n'
+                          'subjectKeyIdentifier=hash\n'
+                          'authorityKeyIdentifier=keyid,issuer\n')
     run('openssl', 'x509', '-req', '-in', str(root/'server.csr'), '-CA', str(root/'ca.crt'),
         '-CAkey', str(root/'ca.key'), '-CAcreateserial', '-days', '1', '-sha256',
-        '-copy_extensions', 'copy', '-out', str(root/'server.crt'))
+        '-extfile', str(extensions), '-out', str(root/'server.crt'))
 
 
 def main():
