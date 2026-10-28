@@ -33,9 +33,13 @@ class DisposableTlsTest(unittest.TestCase):
                 self.assertEqual(0o600, stat.S_IMODE((root/f'{name}.key').stat().st_mode))
             self.openssl('verify', '-CAfile', str(root/'ca.crt'), str(root/'server.crt'))
             for host in ('app.soc.test', 'attacker.test'):
-                self.openssl('x509', '-in', str(root/'server.crt'), '-noout', '-checkhost', host)
-            wrong_host = subprocess.run(['openssl', 'x509', '-in', str(root/'server.crt'),
-                                         '-noout', '-checkhost', 'untrusted.example'], capture_output=True, timeout=15)
+                self.openssl('verify', '-CAfile', str(root/'ca.crt'),
+                             '-verify_hostname', host, str(root/'server.crt'))
+            # x509 -checkhost historically exits 0 on mismatch in OpenSSL 3.0;
+            # verify checks both chain and hostname and reliably rejects it.
+            wrong_host = subprocess.run(['openssl', 'verify', '-CAfile', str(root/'ca.crt'),
+                                         '-verify_hostname', 'untrusted.example', str(root/'server.crt')],
+                                        capture_output=True, timeout=15)
             self.assertNotEqual(0, wrong_host.returncode)
             self.assertEqual(self.openssl('pkey', '-in', str(root/'server.key'), '-pubout'),
                              self.openssl('x509', '-in', str(root/'server.crt'), '-pubkey', '-noout'))
