@@ -106,7 +106,9 @@ certificate, private key giữ ngoài repository. Thành công của scanner kh�
 đồng nghĩa đạt toàn bộ 253 yêu cầu ASVS 5.0.0 L1/L2 hoặc qualification model.
 TLS candidate chỉ cho phép TLS 1.2/1.3 với bộ mã AEAD, ưu tiên bộ mã phía server;
 trang lỗi do TLS edge sinh cũng có CSP, chống nhúng và `nosniff`. CSP giao diện
-dùng `base-uri 'none'`; phản hồi HTML của Nginx khai báo UTF-8. Chứng thư tạm của
+dùng `base-uri 'none'`; HTML ứng dụng khai báo UTF-8. Nginx chủ động bỏ charset
+trên redirect 301/302 gốc; kiểm tra này chưa chứng minh charset cho mọi phản hồi.
+Chứng thư tạm của
 CI có quyền CA/serverAuth rõ ràng và được kiểm tra chuỗi/hostname ở chế độ strict.
 Cache CVE lạnh được khởi tạo qua feed chính thức của NIST, từ chối metadata cũ
 quá 48 giờ; ngưỡng dependency audit CVSS 7 không thay đổi. Hướng dẫn feed:

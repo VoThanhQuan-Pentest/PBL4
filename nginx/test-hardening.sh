@@ -99,7 +99,11 @@ assert_security_headers "$asset_response" /assets/svg/twitter.svg
 assert_security_headers "$api_response" /api/health
 assert_security_headers "$spoof_response" HTTPS-redirect
 
-for response in "$root_response" "$index_response" "$spoof_response"; do
+# Nginx deliberately clears charset on native 301/302 responses (including
+# when charset utf-8 is configured). Assert UTF-8 on the application HTML;
+# the redirect status, Location and security headers are checked separately.
+# This does not establish charset compliance for every generated response.
+for response in "$root_response" "$index_response"; do
   if ! printf '%s\n' "$response" | grep -qi '^Content-Type: text/html; charset=utf-8'; then
     printf '%s\n' 'HTML response must declare its UTF-8 charset' >&2
     exit 1
