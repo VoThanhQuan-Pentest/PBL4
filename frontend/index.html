@@ -970,7 +970,8 @@
                 </div>
                 <div class="form-group">
                     <label for="register-password" class="text-14">Mật khẩu</label>
-                    <input type="password" id="register-password" required minlength="12" maxlength="128" placeholder="12–128 ký tự; có thể dùng cụm mật khẩu">
+                    <!-- JS/backend count Unicode code points; HTML maxlength would truncate supplementary characters. -->
+                    <input type="password" id="register-password" required minlength="12" placeholder="12–128 ký tự; có thể dùng cụm mật khẩu">
                 </div>
                 <div class="form-group">
                     <label for="register-confirm-password" class="text-14">Xác nhận mật khẩu</label>
@@ -1067,7 +1068,7 @@
                 </div>
                 <div id="profile-email-password-group" class="form-group hidden">
                     <label for="edit-email-password" class="text-14">Mật khẩu hiện tại</label>
-                    <input type="password" id="edit-email-password" autocomplete="current-password" maxlength="128">
+                    <input type="password" id="edit-email-password" autocomplete="current-password">
                     <small class="form-hint">Dùng khi hệ thống yêu cầu xác minh đổi email.</small>
                 </div>
                 <div class="form-group otp-form-group">
