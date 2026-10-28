@@ -25,6 +25,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 class SiemIpProviderRoundTripIntegrationTest extends ContainerizedIntegrationTest {
     @Autowired private JdbcTemplate jdbc;
     @Autowired private ObjectMapper mapper;
+    @Autowired private SiemPreventionService prevention;
     @TempDir Path temporarySecrets;
 
     @org.junit.jupiter.api.BeforeEach
@@ -138,6 +139,35 @@ class SiemIpProviderRoundTripIntegrationTest extends ContainerizedIntegrationTes
         assertThat(jdbc.queryForObject("""
                 SELECT COUNT(*) FROM siem_ip_provider_attempts WHERE ip_address='11.12.13.15'
                 """, Long.class)).isZero();
+    }
+
+    @Test
+    void reservedQueueEntriesCannotCallProvidersOrCreateEvidence(@org.junit.jupiter.api.io.TempDir Path directory)
+            throws Exception {
+        Path token = directory.resolve("fixture.token");
+        Files.writeString(token, "fixture-valid-token", StandardCharsets.UTF_8);
+        var worker = new SiemIpIntelligenceWorker(jdbc, mapper, token.toString(), token.toString(), true,
+                request -> { throw new AssertionError("Non-global address must never reach a provider"); });
+        for (String ip : new String[]{"192.0.0.1", "2001:2::1"}) {
+            queue(ip);
+            worker.processOne();
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM siem_ip_lookup_requests WHERE ip_address=? AND status='ERROR'",
+                    Long.class, ip)).isEqualTo(1);
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM siem_ip_provider_attempts WHERE ip_address=?",
+                    Long.class, ip)).isZero();
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM siem_ip_intelligence WHERE ip_address=?",
+                    Long.class, ip)).isZero();
+        }
+    }
+
+    @Test
+    void automaticBlocksRefuseNonGlobalAddressesBeforePublishing() {
+        Long policies = jdbc.queryForObject("SELECT COUNT(*) FROM siem_prevention_policies", Long.class);
+        for (String ip : new String[]{"192.0.0.1", "2001:2::1", "3fff::1"}) {
+            assertThat(prevention.blockForSignal(ip, "SCAN", "Owned non-global scope regression", null, 15)).isFalse();
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM siem_ip_blocks WHERE ip_address=?", Long.class, ip)).isZero();
+        }
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM siem_prevention_policies", Long.class)).isEqualTo(policies);
     }
 
     private void queue(String ip) {

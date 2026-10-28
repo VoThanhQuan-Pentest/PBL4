@@ -129,6 +129,13 @@ Bản SIEM/SOC R2 đã được triển khai và nghiệm thu chức năng trong
   phiên đã thu hồi. L2/Admin có thao tác cô lập tài khoản khách theo incident.
 - Chính sách tái phạm IP hỗ trợ 15 phút, 1 giờ, 24 giờ và đến khi gỡ; mức không
   hết hạn chỉ dùng bằng chứng signature ACTIVE đã kiểm thử và gateway ACK.
+- Tra cứu reputation và tạo block chỉ nhận địa chỉ đủ điều kiện public theo
+  snapshot IANA được rà soát ngày 28/10/2026: loại dải đặc biệt không global,
+  N/A hoặc đã ngừng dùng, giữ ngoại lệ global cụ thể hơn dải cha. IPv6 chưa được
+  IANA cấp cũng bị loại, trừ ngoại lệ special-purpose global được phép.
+  Địa chỉ không hợp lệ bị trả 400 ở thao tác nhập tay hoặc bỏ qua khi tự chặn;
+  bản ghi cũ được giữ và block cũ vẫn có thể gỡ theo ID. Đây là phân loại địa chỉ,
+  không phải kiểm tra IP đang hoạt động; không có truy vấn DNS/registry lúc chạy.
 
 Model baseline schema 6/65 feature giữ phạm vi `PROJECT_LIMITED`, allowlist,
 OTP độc lập và hold tối đa 600 giây. Candidate schema 7/81 feature chỉ chạy

@@ -1,12 +1,19 @@
 package com.flarefitness.backend.integration;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.flarefitness.backend.dto.siem.PreventionDtos;
+import com.flarefitness.backend.entity.User;
+import com.flarefitness.backend.exception.BadRequestException;
+import com.flarefitness.backend.repository.UserRepository;
+import com.flarefitness.backend.security.CurrentUserPrincipal;
 import com.flarefitness.backend.entity.siem.IncidentOrigin;
 import com.flarefitness.backend.entity.siem.IncidentNature;
 import com.flarefitness.backend.repository.siem.SiemIncidentRepository;
 import com.flarefitness.backend.service.siem.SiemElasticGateway;
 import com.flarefitness.backend.service.siem.SiemPreventionEventIngestionService;
+import com.flarefitness.backend.service.siem.SiemPreventionService;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
@@ -17,12 +24,44 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 
 @SpringBootTest
 class SiemPreventionIntegrationTest extends ContainerizedIntegrationTest {
     @Autowired private SiemPreventionEventIngestionService ingestion;
     @Autowired private SiemIncidentRepository incidents;
     @Autowired private JdbcTemplate jdbc;
+    @Autowired private SiemPreventionService prevention;
+    @Autowired private UserRepository users;
+
+    @Test
+    @org.springframework.transaction.annotation.Transactional
+    void stricterScopeRejectsNewBlocksButExistingHistoryCanStillBeRevokedById() {
+        User actor = new User();
+        actor.setId("scope-actor-" + UUID.randomUUID());
+        actor.setUsername("scope-actor-" + UUID.randomUUID());
+        actor.setPassword("unused-synthetic-fixture"); actor.setRole("SOC L2");
+        actor.setHoTen("Owned IP scope actor"); actor.setStatus("ACTIVE");
+        actor.setCreatedAt(LocalDateTime.now(ZoneOffset.UTC));
+        users.saveAndFlush(actor);
+        var principal = new CurrentUserPrincipal(actor);
+        var authentication = new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities());
+        assertThatThrownBy(() -> prevention.createIpBlock(new PreventionDtos.CreateIpBlock(
+                "192.0.0.1", "Owned non-global manual regression", 15L, null), authentication))
+                .isInstanceOf(BadRequestException.class);
+
+        String id = "old-scope-block-" + UUID.randomUUID();
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+        jdbc.update("""
+                INSERT INTO siem_ip_blocks (id,ip_address,reason,source_type,started_at,expires_at,version)
+                VALUES (?,'192.0.0.1','Owned historical scope fixture','MANUAL',?,?,0)
+                """, id, now, now.plusMinutes(15));
+        var released = prevention.revokeIpBlock(id, 0, authentication);
+        assertThat(released.revokedAt()).isNotNull();
+        assertThat(released.version()).isEqualTo(1);
+        assertThat(released.ipAddress()).isEqualTo("192.0.0.1");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM siem_ip_blocks WHERE id=?", Long.class, id)).isEqualTo(1);
+    }
 
     @Test
     void repeatedApprovedSignatureCreatesOneTimedBlockAndOneSocIncident() {

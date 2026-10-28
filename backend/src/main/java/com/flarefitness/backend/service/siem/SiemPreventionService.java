@@ -11,7 +11,6 @@ import com.flarefitness.backend.exception.ResourceNotFoundException;
 import com.flarefitness.backend.repository.siem.SiemIncidentRepository;
 import com.flarefitness.backend.security.CurrentUserPrincipal;
 import com.flarefitness.backend.service.AuditLogService;
-import java.net.Inet4Address;
 import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
@@ -715,20 +714,9 @@ public class SiemPreventionService {
                     || ip.isSiteLocalAddress() || ip.isMulticastAddress()) {
                 throw new BadRequestException("Private or reserved IP is not eligible.");
             }
-            byte[] bytes = ip.getAddress();
-            if (ip instanceof Inet4Address && (
-                    (bytes[0] & 0xff) == 0 || (bytes[0] & 0xff) >= 224
-                    || ((bytes[0] & 0xff) == 100 && ((bytes[1] & 0xff) & 0xc0) == 64)
-                    || ((bytes[0] & 0xff) == 192 && (bytes[1] & 0xff) == 0 && (bytes[2] & 0xff) == 2)
-                    || ((bytes[0] & 0xff) == 198 && (bytes[1] & 0xff) == 51 && (bytes[2] & 0xff) == 100)
-                    || ((bytes[0] & 0xff) == 203 && (bytes[1] & 0xff) == 0 && (bytes[2] & 0xff) == 113)
-                    || ((bytes[0] & 0xff) == 198 && ((bytes[1] & 0xff) & 0xfe) == 18))) {
-                throw new BadRequestException("Reserved IP is not eligible.");
-            }
-            if (ip instanceof Inet6Address && (
-                    ((bytes[0] & 0xfe) == 0xfc)
-                    || (bytes[0] == 0x20 && bytes[1] == 0x01 && bytes[2] == 0x0d && bytes[3] == (byte) 0xb8))) {
-                throw new BadRequestException("Reserved IPv6 address is not eligible.");
+            if (!PublicIpEligibility.isEligible(ip)) {
+                throw new BadRequestException(ip instanceof Inet6Address
+                        ? "Reserved IPv6 address is not eligible." : "Reserved IP is not eligible.");
             }
             return ip.getHostAddress();
         } catch (UnknownHostException | NumberFormatException exception) {
