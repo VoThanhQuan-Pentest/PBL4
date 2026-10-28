@@ -2,6 +2,7 @@ package com.flarefitness.backend.security;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -29,7 +30,6 @@ class RedisTokenStoreTest {
 
     @BeforeEach
     void setUp() {
-        when(redisTemplate.opsForSet()).thenReturn(setOperations);
         tokenStore = new RedisTokenStore(redisTemplate, "auth:token:", "auth:user-tokens:");
     }
 
@@ -44,11 +44,12 @@ class RedisTokenStoreTest {
         ArgumentCaptor<String> keyCaptor = ArgumentCaptor.forClass(String.class);
         verify(valueOperations).set(keyCaptor.capture(), eq("Alice"), eq(Duration.ofSeconds(90)));
         assertThat(keyCaptor.getValue()).isEqualTo("auth:token:" + fingerprint).doesNotContain(rawToken);
-        verify(setOperations).add("auth:user-tokens:alice", fingerprint);
+        verify(redisTemplate).execute(any(), eq(java.util.List.of("auth:user-tokens:alice")), eq(fingerprint), eq("90000"));
     }
 
     @Test
     void logoutAllAlsoRevokesLegacyRawTokenKeys() {
+        when(redisTemplate.opsForSet()).thenReturn(setOperations);
         String legacyRawToken = "legacy.jwt.sensitive-token";
         String currentFingerprint = TokenFingerprint.sha256("current.jwt.token");
         when(setOperations.members("auth:user-tokens:alice"))

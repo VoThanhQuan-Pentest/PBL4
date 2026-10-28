@@ -37,6 +37,18 @@ public class RedisTokenStore {
             return 1
             """, Long.class);
 
+    // Preserve the index horizon across old-token migration and concurrent saves.
+    // Read before SADD to distinguish missing from already-persistent indexes.
+    private static final org.springframework.data.redis.core.script.DefaultRedisScript<Long> REGISTER_SESSION =
+            new org.springframework.data.redis.core.script.DefaultRedisScript<>("""
+            local remaining = redis.call('PTTL', KEYS[1])
+            redis.call('SADD', KEYS[1], ARGV[1])
+            if remaining == -2 or (remaining >= 0 and remaining < tonumber(ARGV[2])) then
+                redis.call('PEXPIRE', KEYS[1], ARGV[2])
+            end
+            return 1
+            """, Long.class);
+
     public RedisTokenStore(StringRedisTemplate redisTemplate, String tokenPrefix, String userTokenPrefix) {
         this(redisTemplate, tokenPrefix, userTokenPrefix, 0);
     }
@@ -61,8 +73,8 @@ public class RedisTokenStore {
         if (idleSeconds > 0) redisTemplate.opsForValue().set(idleKey(fingerprint), username,
                 Duration.ofSeconds(Math.min(idleSeconds, ttlSeconds)));
         String userKey = userKey(username);
-        redisTemplate.opsForSet().add(userKey, fingerprint);
-        redisTemplate.expire(userKey, Duration.ofSeconds(ttlSeconds));
+        redisTemplate.execute(REGISTER_SESSION, List.of(userKey), fingerprint,
+                Long.toString(Duration.ofSeconds(ttlSeconds).toMillis()));
     }
 
     public boolean contains(String token) {

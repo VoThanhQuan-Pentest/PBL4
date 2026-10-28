@@ -85,6 +85,10 @@ hóa Base64url không padding (43 ký tự). Redis tiếp tục lưu fingerprint
 và binding tài khoản hiện có; token UUID đã cấp có binding hợp lệ vẫn dùng được
 một lần trong thời hạn còn lại. Không có migration hoặc reset credential.
 
+Danh sách phiên Redis chỉ giữ hoặc kéo dài thời hạn khi thêm/chuyển token,
+không rút ngắn theo token cũ sắp hết hạn. Danh sách legacy không hết hạn được
+giữ nguyên; bản vá không khôi phục các thành viên đã mất trước đó.
+
 Chính sách mật khẩu mới dùng chung cho đăng ký, đổi/khôi phục và quản trị tạo/
 đổi mật khẩu: 12–128 ký tự Unicode, cho phép passphrase và giữ nguyên khoảng
 trắng/chữ hoa thường. Không reset hay bắt đổi mật khẩu định kỳ. Riêng hash
