@@ -48,7 +48,13 @@ class SiemIpProviderRoundTripIntegrationTest extends ContainerizedIntegrationTes
                     String json;
                     if ("api.ipinfo.io".equals(request.uri().getHost())) {
                         assertThat(request.uri().getPath()).isEqualTo("/lite/11.12.13.14");
-                        assertThat(request.uri().getRawQuery()).isEqualTo("token=fixture-ipinfo-token");
+                        assertThat(request.uri().getRawQuery()).isNull();
+                        assertThat(request.uri().getRawUserInfo()).isNull();
+                        assertThat(request.uri().getRawFragment()).isNull();
+                        assertThat(request.uri().toASCIIString()).doesNotContain("fixture-ipinfo-token");
+                        assertThat(request.headers().firstValue("Authorization"))
+                                .hasValue("Bearer fixture-ipinfo-token");
+                        assertThat(request.headers().firstValue("Key")).isEmpty();
                         json = """
                                 {"ip":"11.12.13.14","country_code":"US",
                                  "asn":"AS64501","as_name":"Fixture Network"}
@@ -60,6 +66,8 @@ class SiemIpProviderRoundTripIntegrationTest extends ContainerizedIntegrationTes
                                 .isEqualTo("ipAddress=11.12.13.14&maxAgeInDays=30");
                         assertThat(request.headers().firstValue("Key"))
                                 .hasValue("fixture-abuse-key");
+                        assertThat(request.headers().firstValue("Authorization")).isEmpty();
+                        assertThat(request.uri().toASCIIString()).doesNotContain("fixture-abuse-key");
                         json = """
                                 {"data":{"ipAddress":"11.12.13.14","countryCode":"US",
                                  "abuseConfidenceScore":85,"totalReports":7,"numDistinctUsers":3}}

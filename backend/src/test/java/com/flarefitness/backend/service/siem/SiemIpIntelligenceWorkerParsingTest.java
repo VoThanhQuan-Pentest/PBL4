@@ -66,6 +66,8 @@ class SiemIpIntelligenceWorkerParsingTest {
                 .isTrue();
         assertThat(SiemIpIntelligenceWorker.invalidCredential("IPINFO_TOKEN=example"))
                 .isTrue();
+        assertThat(SiemIpIntelligenceWorker.invalidCredential("example\r\nX-Injected: value"))
+                .isTrue();
         assertThat(SiemIpIntelligenceWorker.invalidCredential("example-token-value"))
                 .isFalse();
     }

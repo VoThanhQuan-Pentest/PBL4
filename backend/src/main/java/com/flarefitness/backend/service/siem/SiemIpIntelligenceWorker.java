@@ -189,13 +189,13 @@ public class SiemIpIntelligenceWorker {
 
     private HttpRequest requestFor(String provider, String ip, String key) {
         String target = "IPINFO".equals(provider)
-                ? "https://api.ipinfo.io/lite/" + ip + "?token=" +
-                    URLEncoder.encode(key, StandardCharsets.UTF_8)
+                ? "https://api.ipinfo.io/lite/" + ip
                 : "https://api.abuseipdb.com/api/v2/check?ipAddress=" +
                     URLEncoder.encode(ip, StandardCharsets.UTF_8) + "&maxAgeInDays=30";
         HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(target))
                 .timeout(Duration.ofSeconds(2))
                 .header("Accept", "application/json");
+        if ("IPINFO".equals(provider)) builder.header("Authorization", "Bearer " + key);
         if ("ABUSEIPDB".equals(provider)) builder.header("Key", key);
         return builder.GET().build();
     }
