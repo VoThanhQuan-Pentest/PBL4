@@ -106,6 +106,7 @@ class TlsEdgeTest(unittest.TestCase):
             self.assertEqual(1, sum(key.lower() == name.lower() for key, _ in fields), name)
         headers = {key.lower(): value for key, value in fields}
         self.assertIn("base-uri 'none'", headers['content-security-policy'])
+        self.assertIn("object-src 'none'", headers['content-security-policy'])
         self.assertIn("frame-ancestors 'none'", headers['content-security-policy'])
         self.assertIn('max-age=31536000', headers['strict-transport-security'])
         self.assertEqual('nosniff', headers['x-content-type-options'])
