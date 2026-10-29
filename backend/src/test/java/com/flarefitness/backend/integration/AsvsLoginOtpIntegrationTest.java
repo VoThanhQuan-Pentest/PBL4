@@ -79,6 +79,43 @@ class AsvsLoginOtpIntegrationTest extends ContainerizedIntegrationTest {
         assertThat(verify(challenge, codes.get(user.getEmail()), IP, AGENT).getResponse().getStatus()).isEqualTo(401);
     }
 
+    @Test void emailFactorAuditDistinguishesIssuanceRejectionAndCompletedVerification() throws Exception {
+        var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger("AUDIT");
+        var previousLevel = logger.getLevel();
+        logger.setLevel(ch.qos.logback.classic.Level.INFO);
+        var captured = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        captured.start();
+        logger.addAppender(captured);
+        try {
+            User user = fixture();
+            Challenge challenge = begin(user);
+            String code = codes.get(user.getEmail());
+            String wrong = "000000".equals(code) ? "000001" : "000000";
+            assertThat(verify(challenge, wrong, IP, AGENT).getResponse().getStatus()).isEqualTo(401);
+            assertThat(verify(challenge, code, IP, AGENT).getResponse().getStatus()).isEqualTo(200);
+            assertThat(verify(challenge, code, IP, AGENT).getResponse().getStatus()).isEqualTo(401);
+            var messages = captured.list.stream().map(event -> event.getFormattedMessage()).toList();
+            assertThat(messages.stream().filter(m -> m.startsWith("action=AUTH_LOGIN_EMAIL_OTP_ISSUED outcome=SUCCESS actorId=- ")).count()).isEqualTo(1);
+            assertThat(messages.stream().filter(m -> m.startsWith("action=AUTH_LOGIN_EMAIL_OTP_VERIFIED outcome=SUCCESS ")).count()).isEqualTo(1);
+            assertThat(messages.stream().filter(m -> m.startsWith("action=AUTH_LOGIN_EMAIL_OTP_REJECTED outcome=FAILURE actorId=- subjectId=- ")).count()).isEqualTo(2);
+            assertThat(messages.stream().filter(m -> m.startsWith("action=AUTH_LOGIN outcome=SUCCESS ")).count()).isEqualTo(1);
+            // Check the permitted data slots, not arbitrary substrings of random IDs.
+            // Boolean assertions also keep synthetic secrets out of failure output.
+            assertThat(captured.list.stream().filter(e -> e.getFormattedMessage().startsWith("action=AUTH_LOGIN_EMAIL_OTP_"))
+                    .allMatch(e -> {
+                        Object[] fields = e.getArgumentArray();
+                        return fields.length == 7
+                                && ("-".equals(fields[2]) || user.getId().equals(fields[2]))
+                                && ("-".equals(fields[3]) || user.getId().equals(fields[3]))
+                                && "AUTH_FACTOR".equals(fields[4]) && "EMAIL_OTP".equals(fields[5]);
+                    })).isTrue();
+        } finally {
+            logger.detachAppender(captured);
+            captured.stop();
+            logger.setLevel(previousLevel);
+        }
+    }
+
     @Test void onlySuccessfulOtpRetiresThePresentedSessionAndLeavesOtherDevicesIntact() throws Exception {
         User user = fixture();
         var previous = existingSession(user);

@@ -338,6 +338,15 @@ bodies, cookies, passwords, OTPs or authorization headers to any sink. Do not
 change Docker logging/rotation on the running stack merely to satisfy this
 inventory: define and test the missing operator policy before rollout.
 
+Login OTP additionally emits fixed `AUTH_LOGIN_*OTP*` audit actions for challenge
+issuance/rejection/rate limits and email-factor verification/rejection/errors.
+Issuance does not identify an authenticated actor; a completed verification uses
+the trusted account ID. Missing proof is not labelled expired or replayed without
+evidence. Only fixed factor labels and opaque IDs enter these records; successful
+records follow transaction commit and rejections are immediate. They use the
+existing AUDIT console sink, not the model's feature-event outbox. This does not
+claim complete auth/audit transport coverage or alter the model contract.
+
 The isolated ASVS workflow opts into `ASVS_CROSS_STREAM_VERIFY=1` when running
 the existing verifier. It appends owned loopback fixtures to the three log
 streams, checks a common `trace.id` and typed ECS identity, and confirms repeated

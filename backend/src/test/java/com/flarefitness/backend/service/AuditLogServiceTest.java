@@ -10,6 +10,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 class AuditLogServiceTest {
 
@@ -29,6 +31,10 @@ class AuditLogServiceTest {
 
     @AfterEach
     void tearDown() {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
+        TransactionSynchronizationManager.setActualTransactionActive(false);
         MDC.clear();
         auditLogger.detachAppender(appender);
         appender.stop();
@@ -52,5 +58,33 @@ class AuditLogServiceTest {
             assertThat(event.getFormattedMessage()).contains("traceId=trace-123");
             assertThat(event.getFormattedMessage()).doesNotContain("\n");
         });
+    }
+
+    @Test
+    void successfulFactorRecordWaitsForCommitAndKeepsItsOriginalTrace() {
+        TransactionSynchronizationManager.initSynchronization();
+        TransactionSynchronizationManager.setActualTransactionActive(true);
+        MDC.put("traceId", "owned-original-trace");
+        new AuditLogService().success("AUTH_LOGIN_EMAIL_OTP_VERIFIED", "user-1", "user-1", "AUTH_FACTOR", "EMAIL_OTP");
+        assertThat(appender.list).isEmpty();
+        MDC.put("traceId", "owned-later-trace");
+        TransactionSynchronizationManager.getSynchronizations().forEach(TransactionSynchronization::afterCommit);
+        assertThat(appender.list).singleElement().satisfies(event -> {
+            assertThat(event.getFormattedMessage()).contains("traceId=owned-original-trace");
+            assertThat(event.getFormattedMessage()).doesNotContain("owned-later-trace");
+        });
+    }
+
+    @Test
+    void rollbackDiscardsFactorSuccessButRetainsImmediateRejection() {
+        TransactionSynchronizationManager.initSynchronization();
+        TransactionSynchronizationManager.setActualTransactionActive(true);
+        var audit = new AuditLogService();
+        audit.success("AUTH_LOGIN_EMAIL_OTP_ISSUED", null, "user-1", "AUTH_FACTOR", "EMAIL_OTP");
+        audit.failure("AUTH_LOGIN_EMAIL_OTP_REJECTED", null, null, "AUTH_FACTOR", "EMAIL_OTP");
+        TransactionSynchronizationManager.getSynchronizations()
+                .forEach(callback -> callback.afterCompletion(TransactionSynchronization.STATUS_ROLLED_BACK));
+        assertThat(appender.list).singleElement().satisfies(event ->
+                assertThat(event.getFormattedMessage()).startsWith("action=AUTH_LOGIN_EMAIL_OTP_REJECTED outcome=FAILURE "));
     }
 }

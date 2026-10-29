@@ -18,6 +18,8 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
@@ -30,6 +32,7 @@ import org.springframework.transaction.annotation.Transactional;
 /** Password proof creates no session. Only a current, single-use email proof can finish login. */
 @Service
 public class LoginOtpService {
+    private static final Logger LOGGER = LoggerFactory.getLogger(LoginOtpService.class);
     private static final Duration TTL = Duration.ofMinutes(5);
     private static final SecureRandom RANDOM = new SecureRandom();
     private static final DefaultRedisScript<Long> CONSUME = new DefaultRedisScript<>("""
@@ -55,20 +58,37 @@ public class LoginOtpService {
     private final String prefix;
     private final String from;
     private final boolean enabled;
+    private final AuditLogService audit;
 
     public LoginOtpService(AuthService auth, UserRepository users, StringRedisTemplate redis,
             PasswordEncoder encoder, JavaMailSender mail,
             @Value("${app.otp.redis-prefix}") String prefix,
             @Value("${app.mail.from}") String from,
-            @Value("${app.security.login-otp-enabled:false}") boolean enabled) {
+            @Value("${app.security.login-otp-enabled:false}") boolean enabled, AuditLogService audit) {
         this.auth = auth; this.users = users; this.redis = redis; this.encoder = encoder;
         this.mail = mail; this.prefix = prefix + "login:"; this.from = from; this.enabled = enabled;
+        this.audit = audit;
     }
 
     public boolean isEnabled() { return enabled; }
 
     @Transactional
     public LoginChallengeResponse begin(LoginRequest request, String ip, String agent) {
+        try {
+            return beginChallenge(request, ip, agent);
+        } catch (TooManyRequestsException rejected) {
+            factorAudit(false, "AUTH_LOGIN_OTP_CHALLENGE_RATE_LIMITED", null, null);
+            throw rejected;
+        } catch (UnauthorizedException rejected) {
+            factorAudit(false, "AUTH_LOGIN_OTP_CHALLENGE_REJECTED", null, null);
+            throw rejected;
+        } catch (RuntimeException failure) {
+            factorAudit(false, "AUTH_LOGIN_OTP_CHALLENGE_ERROR", null, null);
+            throw failure;
+        }
+    }
+
+    private LoginChallengeResponse beginChallenge(LoginRequest request, String ip, String agent) {
         requireEnabled();
         User verified = auth.authenticateForLogin(request, ip, agent);
         requireContact(verified);
@@ -107,11 +127,26 @@ public class LoginOtpService {
             throw new UnauthorizedException("Khong the gui OTP dang nhap. Vui long thu lai sau.");
         }
         String email = user.getEmail();
+        // Password proof is not a completed login: keep the actor unassigned.
+        factorAudit(true, "AUTH_LOGIN_EMAIL_OTP_ISSUED", null, user.getId());
         return new LoginChallengeResponse(id, TTL.toSeconds(), email.charAt(0) + "***" + email.substring(email.indexOf('@')), "EMAIL_OTP");
     }
 
     @Transactional
     public LoginResponse verify(LoginOtpRequest request, String ip, String agent) {
+        try {
+            return verifyProof(request, ip, agent);
+        } catch (UnauthorizedException rejected) {
+            // Missing proof can mean expired, consumed or unknown; do not guess.
+            factorAudit(false, "AUTH_LOGIN_EMAIL_OTP_REJECTED", null, null);
+            throw rejected;
+        } catch (RuntimeException failure) {
+            factorAudit(false, "AUTH_LOGIN_EMAIL_OTP_ERROR", null, null);
+            throw failure;
+        }
+    }
+
+    private LoginResponse verifyProof(LoginOtpRequest request, String ip, String agent) {
         requireEnabled();
         String value = redis.opsForValue().get(challengeKey(request.challengeId()));
         if (value == null) throw invalid();
@@ -130,7 +165,20 @@ public class LoginOtpService {
         Long result = redis.execute(CONSUME, List.of(challengeKey(request.challengeId()), account + ":attempts", account + ":active"),
                 value, request.challengeId(), matches ? "yes" : "no");
         if (!Long.valueOf(1L).equals(result)) throw invalid();
-        return auth.completeLogin(user, ip, agent);
+        LoginResponse response = auth.completeLogin(user, ip, agent);
+        factorAudit(true, "AUTH_LOGIN_EMAIL_OTP_VERIFIED", user.getId(), user.getId());
+        return response;
+    }
+
+    private void factorAudit(boolean success, String action, String actor, String subject) {
+        try {
+            // Use the existing immediate-failure / after-commit-success contract.
+            // Audit-only records do not enter the model's event-count features.
+            if (success) audit.success(action, actor, subject, "AUTH_FACTOR", "EMAIL_OTP");
+            else audit.failure(action, actor, subject, "AUTH_FACTOR", "EMAIL_OTP");
+        } catch (RuntimeException failure) {
+            LOGGER.warn("Login OTP audit delivery failed exceptionType={}", failure.getClass().getSimpleName());
+        }
     }
 
     private boolean attemptsExhausted(String account) {
