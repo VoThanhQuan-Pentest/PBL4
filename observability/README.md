@@ -353,6 +353,14 @@ follows reset-grant issuance and transaction commit; it has no authenticated
 actor. Rejections carry no inferred account, expiry or replay label. The reset
 grant, OTP and submitted email never enter these audit fields.
 
+Registration challenge delivery and completed registration also include fixed
+email-factor audit metadata. Failed registration attempts use generic attempt
+outcomes: a password, availability or persistence failure is not labelled an
+invalid OTP. The new factor record associates only the newly created opaque
+account ID after session issuance succeeds; submitted identity fields are excluded.
+A transaction completion failure emits one generic error when the service has
+not already recorded a rejection; rolled-back registration success is suppressed.
+
 The isolated ASVS workflow opts into `ASVS_CROSS_STREAM_VERIFY=1` when running
 the existing verifier. It appends owned loopback fixtures to the three log
 streams, checks a common `trace.id` and typed ECS identity, and confirms repeated

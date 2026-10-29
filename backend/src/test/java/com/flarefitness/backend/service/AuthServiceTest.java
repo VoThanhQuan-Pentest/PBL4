@@ -140,6 +140,157 @@ class AuthServiceTest {
     }
 
     @Test
+    void registrationIssuanceAuditDoesNotAttributeAnUnverifiedAccount() {
+        authService.sendRegisterOtp(new OtpRequest("owned-register", "owned@example.test", "0935250037"), "127.0.0.1");
+        verify(emailOtpService).sendOtp(EmailOtpService.PURPOSE_REGISTER, "owned@example.test");
+        verify(auditLogService).success("AUTH_REGISTER_EMAIL_OTP_ISSUED", null, null, "AUTH_FACTOR", "EMAIL_OTP");
+        org.mockito.Mockito.verifyNoMoreInteractions(auditLogService);
+        org.mockito.Mockito.verifyNoInteractions(securityEventService, jwtTokenService, redisTokenStore);
+    }
+
+    @Test
+    void duplicateRegistrationRequestIsRejectedWithoutClaimingInvalidOtp() {
+        when(userRepository.existsByUsernameIgnoreCase("owned-register")).thenReturn(true);
+        assertThatThrownBy(() -> authService.sendRegisterOtp(
+                new OtpRequest("owned-register", "owned@example.test", "0935250037"), "127.0.0.1"))
+                .isInstanceOf(BadRequestException.class).hasMessage("Ten dang nhap da ton tai.");
+        verify(auditLogService).failure("AUTH_REGISTER_OTP_REQUEST_REJECTED", null, null, "AUTH_FACTOR", "EMAIL_OTP");
+        org.mockito.Mockito.verifyNoInteractions(emailOtpService, securityEventService);
+    }
+
+    @Test
+    void registrationDeliveryFailurePreservesItsExceptionAndHasNoIssuedSuccess() {
+        var unavailable = new IllegalStateException("owned mail transport");
+        doThrow(unavailable).when(emailOtpService).sendOtp(EmailOtpService.PURPOSE_REGISTER, "owned@example.test");
+        assertThatThrownBy(() -> authService.sendRegisterOtp(
+                new OtpRequest("owned-register", "owned@example.test", "0935250037"), "127.0.0.1")).isSameAs(unavailable);
+        verify(auditLogService).failure("AUTH_REGISTER_OTP_REQUEST_ERROR", null, null, "AUTH_FACTOR", "EMAIL_OTP");
+        org.mockito.Mockito.verifyNoMoreInteractions(auditLogService);
+    }
+
+    @Test
+    void registrationSendRateLimitDoesNotDeliverOtp() {
+        var rejected = new TooManyRequestsException("owned budget");
+        doThrow(rejected).when(ipRateLimitService).assertOtpSendAllowed(
+                EmailOtpService.PURPOSE_REGISTER, "owned@example.test", "127.0.0.1");
+        assertThatThrownBy(() -> authService.sendRegisterOtp(
+                new OtpRequest("owned-register", "owned@example.test", "0935250037"), "127.0.0.1")).isSameAs(rejected);
+        verify(auditLogService).failure("AUTH_REGISTER_OTP_REQUEST_RATE_LIMITED", null, null, "AUTH_FACTOR", "EMAIL_OTP");
+        org.mockito.Mockito.verifyNoInteractions(emailOtpService);
+    }
+
+    @Test
+    void invalidRegistrationProofIsAGenericRegistrationRejection() {
+        var rejected = new BadRequestException("owned proof rejection");
+        doThrow(rejected).when(emailOtpService).verifyOtp(EmailOtpService.PURPOSE_REGISTER, "owned@example.test", "123456");
+        assertThatThrownBy(() -> authService.register(registrationRequest())).isSameAs(rejected);
+        verify(auditLogService).failure("AUTH_REGISTER_ATTEMPT_REJECTED", null, null, "AUTH_FACTOR", "EMAIL_OTP");
+        org.mockito.Mockito.verifyNoMoreInteractions(auditLogService);
+        verify(userRepository, never()).save(any());
+        org.mockito.Mockito.verifyNoInteractions(jwtTokenService, redisTokenStore, securityEventService);
+    }
+
+    @Test
+    void registrationProofBudgetPreservesTheRateLimitException() {
+        var rejected = new TooManyRequestsException("owned verification budget");
+        doThrow(rejected).when(emailOtpService).verifyOtp(EmailOtpService.PURPOSE_REGISTER, "owned@example.test", "123456");
+        assertThatThrownBy(() -> authService.register(registrationRequest())).isSameAs(rejected);
+        verify(auditLogService).failure("AUTH_REGISTER_ATTEMPT_RATE_LIMITED", null, null, "AUTH_FACTOR", "EMAIL_OTP");
+        org.mockito.Mockito.verifyNoInteractions(jwtTokenService, redisTokenStore, securityEventService);
+    }
+
+    @Test
+    void postProofSessionFailureDoesNotClaimCompletedRegistrationFactor() {
+        var unavailable = new IllegalStateException("owned token storage");
+        when(jwtTokenService.generateToken(any())).thenThrow(unavailable);
+        assertThatThrownBy(() -> authService.register(registrationRequest())).isSameAs(unavailable);
+        verify(auditLogService).failure("AUTH_REGISTER_ATTEMPT_ERROR", null, null, "AUTH_FACTOR", "EMAIL_OTP");
+        verify(auditLogService, never()).success(eq("AUTH_REGISTER_EMAIL_OTP_VERIFIED"), any(), any(), any(), any());
+    }
+
+    @Test
+    void registrationSuccessAuditsOnlyPersistedOpaqueIdentityAfterIssuingTheSession() {
+        when(jwtTokenService.generateToken(any())).thenReturn("owned-session");
+        var response = authService.register(registrationRequest());
+        org.assertj.core.api.Assertions.assertThat(response.accessToken()).isEqualTo("owned-session");
+        var order = org.mockito.Mockito.inOrder(emailOtpService, redisTokenStore, auditLogService);
+        order.verify(emailOtpService).verifyOtp(EmailOtpService.PURPOSE_REGISTER, "owned@example.test", "123456");
+        order.verify(auditLogService).success("ACCOUNT_REGISTER", response.user().id(), response.user().id(), "USER", response.user().id());
+        order.verify(redisTokenStore).save("owned-session", "owned-register", 0L);
+        order.verify(auditLogService).success("AUTH_REGISTER_EMAIL_OTP_VERIFIED", null, response.user().id(), "AUTH_FACTOR", "EMAIL_OTP");
+        verify(securityEventService).recordDomainAction("ACCOUNT_REGISTER", response.user().id(), response.user().id());
+        org.mockito.Mockito.verifyNoMoreInteractions(securityEventService);
+    }
+
+    @Test
+    void registrationAuditFailureCannotReplaceAnExistingRejection() {
+        when(userRepository.existsByUsernameIgnoreCase("owned-register")).thenReturn(true);
+        doThrow(new IllegalStateException("owned sink")).when(auditLogService)
+                .failure("AUTH_REGISTER_ATTEMPT_REJECTED", null, null, "AUTH_FACTOR", "EMAIL_OTP");
+        assertThatThrownBy(() -> authService.register(registrationRequest()))
+                .isInstanceOf(BadRequestException.class).hasMessage("Ten dang nhap da ton tai.");
+        org.mockito.Mockito.verifyNoInteractions(emailOtpService, jwtTokenService, redisTokenStore, securityEventService);
+    }
+
+    private com.flarefitness.backend.dto.auth.RegisterRequest registrationRequest() {
+        return new com.flarefitness.backend.dto.auth.RegisterRequest("owned-register", "Owned fixture", "owned@example.test",
+                "0935250037", "Owned registration password", "Owned registration password", "123456");
+    }
+
+    @Test
+    void aPostProofPhoneConflictIsNotLabelledAnInvalidEmailFactor() {
+        var rejected = new BadRequestException("owned phone collision");
+        when(phoneNumberService.requireAvailable("0935250037", null)).thenReturn("0935250037").thenThrow(rejected);
+        assertThatThrownBy(() -> authService.register(registrationRequest())).isSameAs(rejected);
+        verify(emailOtpService).verifyOtp(EmailOtpService.PURPOSE_REGISTER, "owned@example.test", "123456");
+        verify(auditLogService).failure("AUTH_REGISTER_ATTEMPT_REJECTED", null, null, "AUTH_FACTOR", "EMAIL_OTP");
+        org.mockito.Mockito.verifyNoMoreInteractions(auditLogService);
+        verify(userRepository, never()).save(any());
+        org.mockito.Mockito.verifyNoInteractions(jwtTokenService, redisTokenStore, securityEventService);
+    }
+
+    @Test
+    void newRegistrationSuccessAuditFailureCannotReplaceTheIssuedSession() {
+        when(jwtTokenService.generateToken(any())).thenReturn("owned-session");
+        org.mockito.Mockito.doAnswer(call -> {
+            if ("AUTH_REGISTER_EMAIL_OTP_VERIFIED".equals(call.getArgument(0))) {
+                throw new IllegalStateException("owned sink");
+            }
+            return null;
+        }).when(auditLogService).success(any(), any(), any(), any(), any());
+        org.assertj.core.api.Assertions.assertThat(authService.register(registrationRequest()).accessToken()).isEqualTo("owned-session");
+        verify(redisTokenStore).save("owned-session", "owned-register", 0L);
+    }
+
+    @Test
+    void registrationTransactionFailureProducesOneUnassociatedError() {
+        org.springframework.transaction.support.TransactionSynchronizationManager.initSynchronization();
+        try {
+            authService.register(registrationRequest());
+            var hooks = org.springframework.transaction.support.TransactionSynchronizationManager.getSynchronizations();
+            hooks.forEach(h -> h.afterCompletion(org.springframework.transaction.support.TransactionSynchronization.STATUS_UNKNOWN));
+            verify(auditLogService).failure("AUTH_REGISTER_ATTEMPT_ERROR", null, null, "AUTH_FACTOR", "EMAIL_OTP");
+        } finally {
+            org.springframework.transaction.support.TransactionSynchronizationManager.clearSynchronization();
+        }
+    }
+
+    @Test
+    void registrationRollbackDoesNotDuplicateAnAlreadyAuditedRejection() {
+        when(userRepository.existsByUsernameIgnoreCase("owned-register")).thenReturn(true);
+        org.springframework.transaction.support.TransactionSynchronizationManager.initSynchronization();
+        try {
+            assertThatThrownBy(() -> authService.register(registrationRequest())).isInstanceOf(BadRequestException.class);
+            org.springframework.transaction.support.TransactionSynchronizationManager.getSynchronizations()
+                    .forEach(h -> h.afterCompletion(org.springframework.transaction.support.TransactionSynchronization.STATUS_ROLLED_BACK));
+            verify(auditLogService).failure("AUTH_REGISTER_ATTEMPT_REJECTED", null, null, "AUTH_FACTOR", "EMAIL_OTP");
+            org.mockito.Mockito.verifyNoMoreInteractions(auditLogService);
+        } finally {
+            org.springframework.transaction.support.TransactionSynchronizationManager.clearSynchronization();
+        }
+    }
+
+    @Test
     void unavailableRecoveryAuditCannotReplaceTheIssuedGrant() {
         User owner = recoveryOwner();
         when(userRepository.findByEmailIgnoreCaseForUpdate(owner.getEmail())).thenReturn(Optional.of(owner));

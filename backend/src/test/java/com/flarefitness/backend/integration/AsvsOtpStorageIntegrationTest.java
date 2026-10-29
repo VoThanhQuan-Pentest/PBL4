@@ -32,6 +32,10 @@ class AsvsOtpStorageIntegrationTest extends ContainerizedIntegrationTest {
     @Autowired StringRedisTemplate redis;
     @Autowired PasswordEncoder encoder;
     @Autowired Environment environment;
+    @Autowired com.flarefitness.backend.service.AuthService auth;
+    @Autowired com.flarefitness.backend.repository.CustomerRepository customers;
+    @Autowired com.flarefitness.backend.repository.UserRepository users;
+    @Autowired org.springframework.transaction.PlatformTransactionManager transactions;
     @MockitoBean JavaMailSender mail;
     private final ConcurrentHashMap<String, String> delivered = new ConcurrentHashMap<>();
 
@@ -43,6 +47,83 @@ class AsvsOtpStorageIntegrationTest extends ContainerizedIntegrationTest {
             if (!matcher.find()) throw new AssertionError("Synthetic delivery contains no OTP");
             delivered.put(message.getTo()[0], matcher.group()); return null;
         }).when(mail).send(any(SimpleMailMessage.class));
+    }
+
+    @Test void registrationAuditDistinguishesDeliveryCompletionAndGenericRejections() {
+        var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger("AUDIT");
+        var previousLevel = logger.getLevel(); logger.setLevel(ch.qos.logback.classic.Level.INFO);
+        var captured = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        captured.start(); logger.addAppender(captured);
+        try {
+            String username = "asvs-register-" + UUID.randomUUID(), email = email(), phone = availablePhone();
+            auth.sendRegisterOtp(new com.flarefitness.backend.dto.auth.OtpRequest(username, email, phone), "192.0.2.186");
+            String code = delivered.get(email); assertThat(code != null).isTrue();
+            String wrong = "000000".equals(code) ? "000001" : "000000";
+            assertThatThrownBy(() -> auth.register(registration(username, email, phone, wrong)))
+                    .isInstanceOf(BadRequestException.class);
+            var result = auth.register(registration(username, email, phone, code));
+            assertThat(result.accessToken() != null && !result.accessToken().isBlank()).isTrue();
+            assertThat(result.user().username()).isEqualTo(username);
+            assertThatThrownBy(() -> auth.register(registration(username, email, phone, code)))
+                    .isInstanceOf(BadRequestException.class);
+            var events = captured.list.stream().filter(e -> e.getFormattedMessage().startsWith("action=AUTH_REGISTER_")).toList();
+            assertThat(events).hasSize(4);
+            assertThat(events.stream().filter(e -> e.getFormattedMessage().startsWith("action=AUTH_REGISTER_EMAIL_OTP_ISSUED outcome=SUCCESS actorId=- subjectId=- ")).count()).isEqualTo(1);
+            assertThat(events.stream().filter(e -> e.getFormattedMessage().startsWith("action=AUTH_REGISTER_EMAIL_OTP_VERIFIED outcome=SUCCESS actorId=- ")).count()).isEqualTo(1);
+            assertThat(events.stream().filter(e -> e.getFormattedMessage().startsWith("action=AUTH_REGISTER_ATTEMPT_REJECTED outcome=FAILURE actorId=- subjectId=- ")).count()).isEqualTo(2);
+            assertThat(events.stream().allMatch(e -> {
+                Object[] fields = e.getArgumentArray();
+                return fields.length == 7 && "-".equals(fields[2])
+                        && ("-".equals(fields[3]) || result.user().id().equals(fields[3]))
+                        && "AUTH_FACTOR".equals(fields[4]) && "EMAIL_OTP".equals(fields[5]);
+            })).isTrue();
+            assertThat(captured.list.stream().filter(e -> e.getFormattedMessage().startsWith("action=ACCOUNT_REGISTER outcome=SUCCESS ")).count()).isEqualTo(1);
+        } finally {
+            logger.detachAppender(captured); captured.stop(); logger.setLevel(previousLevel);
+        }
+    }
+
+    private String availablePhone() {
+        for (int attempt = 0; attempt < 100; attempt++) {
+            String phone = "09" + String.format(java.util.Locale.ROOT, "%08d",
+                    Math.floorMod(UUID.randomUUID().hashCode(), 100_000_000));
+            if (!customers.existsActiveBySdtIn(java.util.Set.of(phone, "+84" + phone.substring(1)))) return phone;
+        }
+        throw new AssertionError("Unable to allocate owned registration phone fixture");
+    }
+
+    @Test void registrationRollbackSuppressesSuccessAndEmitsOneGenericError() {
+        var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger("AUDIT");
+        var previousLevel = logger.getLevel(); logger.setLevel(ch.qos.logback.classic.Level.INFO);
+        var captured = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        captured.start(); logger.addAppender(captured);
+        com.flarefitness.backend.dto.auth.LoginResponse[] issued = new com.flarefitness.backend.dto.auth.LoginResponse[1];
+        try {
+            String username = "asvs-register-rollback-" + UUID.randomUUID(), email = email(), phone = availablePhone();
+            auth.sendRegisterOtp(new com.flarefitness.backend.dto.auth.OtpRequest(username, email, phone), "192.0.2.187");
+            String code = delivered.get(email); assertThat(code != null).isTrue();
+            new org.springframework.transaction.support.TransactionTemplate(transactions).executeWithoutResult(status -> {
+                issued[0] = auth.register(registration(username, email, phone, code));
+                status.setRollbackOnly();
+            });
+            assertThat(users.existsByUsernameIgnoreCase(username)).isFalse();
+            assertThat(captured.list.stream().filter(e -> e.getFormattedMessage()
+                    .startsWith("action=AUTH_REGISTER_ATTEMPT_ERROR outcome=FAILURE actorId=- subjectId=- ")).count()).isEqualTo(1);
+            assertThat(captured.list.stream().noneMatch(e -> e.getFormattedMessage().startsWith("action=AUTH_REGISTER_EMAIL_OTP_VERIFIED ")
+                    || e.getFormattedMessage().startsWith("action=ACCOUNT_REGISTER "))).isTrue();
+        } finally {
+            // The existing Redis session side effect is outside the JPA transaction.
+            try {
+                if (issued[0] != null) auth.retirePreviousSession(issued[0].accessToken());
+            } finally {
+                logger.detachAppender(captured); captured.stop(); logger.setLevel(previousLevel);
+            }
+        }
+    }
+
+    private com.flarefitness.backend.dto.auth.RegisterRequest registration(String username, String email, String phone, String code) {
+        return new com.flarefitness.backend.dto.auth.RegisterRequest(username, "Synthetic registration fixture", email, phone,
+                "Asvs registration fixture password!", "Asvs registration fixture password!", code);
     }
 
     @Test void genericAndSensitiveCodesAreHashedAndConsumedOnlyOnce() {

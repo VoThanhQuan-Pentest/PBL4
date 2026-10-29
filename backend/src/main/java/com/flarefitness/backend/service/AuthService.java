@@ -157,6 +157,38 @@ public class AuthService {
 
     @Transactional
     public LoginResponse register(RegisterRequest request) {
+        var failureRecorded = new java.util.concurrent.atomic.AtomicBoolean();
+        if (org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()) {
+            org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                    new org.springframework.transaction.support.TransactionSynchronization() {
+                        @Override
+                        public void afterCompletion(int status) {
+                            if (status != STATUS_COMMITTED && failureRecorded.compareAndSet(false, true)) {
+                                registrationFactorAudit(false, "AUTH_REGISTER_ATTEMPT_ERROR", null);
+                            }
+                        }
+                    });
+        }
+        try {
+            LoginResponse response = registerAccount(request);
+            registrationFactorAudit(true, "AUTH_REGISTER_EMAIL_OTP_VERIFIED", response.user().id());
+            return response;
+        } catch (BadRequestException rejected) {
+            failureRecorded.set(true);
+            registrationFactorAudit(false, "AUTH_REGISTER_ATTEMPT_REJECTED", null);
+            throw rejected;
+        } catch (TooManyRequestsException rejected) {
+            failureRecorded.set(true);
+            registrationFactorAudit(false, "AUTH_REGISTER_ATTEMPT_RATE_LIMITED", null);
+            throw rejected;
+        } catch (RuntimeException failure) {
+            failureRecorded.set(true);
+            registrationFactorAudit(false, "AUTH_REGISTER_ATTEMPT_ERROR", null);
+            throw failure;
+        }
+    }
+
+    private LoginResponse registerAccount(RegisterRequest request) {
         validateRegisterRequest(request);
         emailOtpService.verifyOtp(EmailOtpService.PURPOSE_REGISTER, request.email(), request.otpCode());
         String phoneNumber = phoneNumberService.requireAvailable(request.sdt(), null);
@@ -215,6 +247,22 @@ public class AuthService {
     }
 
     public void sendRegisterOtp(OtpRequest request, String ipAddress) {
+        try {
+            sendRegistrationChallenge(request, ipAddress);
+            registrationFactorAudit(true, "AUTH_REGISTER_EMAIL_OTP_ISSUED", null);
+        } catch (BadRequestException rejected) {
+            registrationFactorAudit(false, "AUTH_REGISTER_OTP_REQUEST_REJECTED", null);
+            throw rejected;
+        } catch (TooManyRequestsException rejected) {
+            registrationFactorAudit(false, "AUTH_REGISTER_OTP_REQUEST_RATE_LIMITED", null);
+            throw rejected;
+        } catch (RuntimeException failure) {
+            registrationFactorAudit(false, "AUTH_REGISTER_OTP_REQUEST_ERROR", null);
+            throw failure;
+        }
+    }
+
+    private void sendRegistrationChallenge(OtpRequest request, String ipAddress) {
         String email = request.email().trim();
         String username = request.username() == null ? "" : request.username().trim();
         if (!username.isBlank() && userRepository.existsByUsernameIgnoreCase(username)) {
@@ -226,6 +274,16 @@ public class AuthService {
         phoneNumberService.requireAvailable(request.sdt(), null);
         ipRateLimitService.assertOtpSendAllowed(EmailOtpService.PURPOSE_REGISTER, email, ipAddress);
         emailOtpService.sendOtp(EmailOtpService.PURPOSE_REGISTER, email);
+    }
+
+    private void registrationFactorAudit(boolean success, String action, String subject) {
+        try {
+            // Registration input is untrusted; only a completed account's opaque ID is associated.
+            if (success) auditLogService.success(action, null, subject, "AUTH_FACTOR", "EMAIL_OTP");
+            else auditLogService.failure(action, null, subject, "AUTH_FACTOR", "EMAIL_OTP");
+        } catch (RuntimeException failure) {
+            LOGGER.warn("Registration audit delivery failed exceptionType={}", failure.getClass().getSimpleName());
+        }
     }
 
     public void sendForgotPasswordOtp(OtpRequest request, String ipAddress) {
