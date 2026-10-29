@@ -128,9 +128,22 @@ fi
 # An unknown Host must reach the default server, which deliberately drops the
 # connection with 444 rather than serving the SPA to a Host-header attack.
 unknown_host_status=$(curl --connect-timeout 2 --max-time 5 --silent --output /dev/null \
-  --write-out '%{http_code}' -H 'Host: unknown-host.invalid' "${BASE_URL}/" || true)
+  --write-out '%{http_code}' -H 'Host: unknown-host.invalid' \
+  -H 'Referer: https://example.test/?token=owned-referrer-canary' \
+  "${BASE_URL}/?access_token=owned-query-canary" || true)
 if [ "$unknown_host_status" != '000' ]; then
   printf 'Unknown Host was not rejected by the default Nginx server\n' >&2
+  exit 1
+fi
+
+default_event=$(docker exec "$WEB" sh -c 'tail -n 1 /var/log/nginx/access.json.log')
+if ! printf '%s' "$default_event" | jq -e \
+  '."http.response.status_code" == 444 and ."url.query" == "[REDACTED]"' >/dev/null; then
+  printf '%s\n' 'Default virtual host did not use the redacted JSON log' >&2
+  exit 1
+fi
+if docker logs "$WEB" 2>&1 | grep -Eq 'owned-(query|referrer)-canary'; then
+  printf '%s\n' 'Default virtual host retained a sensitive query/referrer' >&2
   exit 1
 fi
 
@@ -264,4 +277,5 @@ if printf '%s\n%s\n%s\n%s\n' "$index_response" "$asset_response" "$api_response"
   exit 1
 fi
 
+NGINX_TEST_IMAGE="$IMAGE" python3 nginx/diagnostics/test-runtime.py
 printf '%s\n' 'Nginx hardening checks passed.'

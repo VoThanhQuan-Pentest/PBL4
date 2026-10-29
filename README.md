@@ -555,6 +555,11 @@ Các lớp bảo vệ chính của project:
 - Filebeat → Logstash dùng mTLS; secret/keystore nằm ngoài Git.
 - Access log không ghi body, cookie, Authorization, JWT hoặc CSRF token; query
   value được redaction trước khi ingest.
+- Nginx native diagnostics đi qua bộ phân loại trước khi lưu vào
+  `native-errors.json.log` và Docker stderr: chỉ giữ thời gian, mức độ và mã lỗi
+  cố định, không giữ nội dung request/header/path thô. PID1 chuyển tiếp signal
+  và mở lại log khi nhận USR1. Log cũ được giữ nguyên; quy tắc này không che dữ
+  liệu tùy ý trong path/User-Agent của access log hoặc thay thế đánh giá ASVS.
 - Production profile fail-fast khi phát hiện JWT, cookie, CORS, datasource,
   Redis, SMTP hoặc trusted-proxy configuration không an toàn.
 
