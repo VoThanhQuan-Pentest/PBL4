@@ -136,7 +136,7 @@ func newServer(upstream, policyURL, tokenFile string, events io.Writer) (*server
 		proxied.Out.Header.Set("X-Request-ID", proxied.In.Context().Value(traceIDKey{}).(string))
 	}
 	proxy.ErrorHandler = func(writer http.ResponseWriter, _ *http.Request, _ error) {
-		http.Error(writer, "Upstream unavailable", http.StatusBadGateway)
+		writeGatewayError(writer, "Upstream unavailable", http.StatusBadGateway)
 	}
 	return &server{
 		proxy: proxy, crs: crs, redis: newRedisSignals(), rateSignals: make(map[netip.Addr]int),
@@ -178,11 +178,10 @@ func (s *server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	if request.URL.Path == "/healthz" {
 		policy := s.policy.Load()
 		if policy == nil {
-			http.Error(writer, "Policy not ready", http.StatusServiceUnavailable)
+			writeGatewayError(writer, "Policy not ready", http.StatusServiceUnavailable)
 			return
 		}
-		writer.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(writer).Encode(map[string]any{
+		writeGatewayJSON(writer, map[string]any{
 			"status": "UP", "policy_version": policy.version,
 			"active_signatures": policy.signatures, "redis_state": s.redis.status(),
 			"policy_schema_version": 2, "durable_policy": s.policyCache != "",
@@ -191,12 +190,12 @@ func (s *server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	policy := s.policy.Load()
 	if policy == nil {
-		http.Error(writer, "Policy not ready", http.StatusServiceUnavailable)
+		writeGatewayError(writer, "Policy not ready", http.StatusServiceUnavailable)
 		return
 	}
 	ip, err := directClientIP(request.RemoteAddr)
 	if err != nil {
-		http.Error(writer, "Invalid connection", http.StatusBadRequest)
+		writeGatewayError(writer, "Invalid connection", http.StatusBadRequest)
 		return
 	}
 	trace := randomID()
@@ -206,38 +205,38 @@ func (s *server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.emitRequest(request, securityEvent{ID: randomID(), TraceID: trace, IP: ip.String(),
 			EventType: "IP_BLOCK", PolicyVersion: policy.version,
 			Action: "DENY", OccurredAt: now})
-		http.Error(writer, "Access denied", http.StatusForbidden)
+		writeGatewayError(writer, "Access denied", http.StatusForbidden)
 		return
 	}
 	if s.redis.blocked(ip, policy.revokedIP[ip], now) {
 		s.emitRequest(request, securityEvent{ID: randomID(), TraceID: trace, IP: ip.String(),
 			EventType: "IP_BLOCK", PolicyVersion: policy.version,
 			Action: "DENY", OccurredAt: now})
-		http.Error(writer, "Access denied", http.StatusForbidden)
+		writeGatewayError(writer, "Access denied", http.StatusForbidden)
 		return
 	}
 	if !s.limits.allow(ip.String()+":web", 100, 200, now) {
 		s.noteRateLimit(ip)
-		http.Error(writer, "Too many requests", http.StatusTooManyRequests)
+		writeGatewayError(writer, "Too many requests", http.StatusTooManyRequests)
 		return
 	}
 	if strings.HasPrefix(request.URL.Path, "/api/") &&
 		!s.limits.allow(ip.String()+":api", 30, 60, now) {
 		s.noteRateLimit(ip)
-		http.Error(writer, "Too many requests", http.StatusTooManyRequests)
+		writeGatewayError(writer, "Too many requests", http.StatusTooManyRequests)
 		return
 	}
 	if request.ContentLength > maxBody {
-		http.Error(writer, "Request too large", http.StatusRequestEntityTooLarge)
+		writeGatewayError(writer, "Request too large", http.StatusRequestEntityTooLarge)
 		return
 	}
 	body, err := io.ReadAll(io.LimitReader(request.Body, maxBody+1))
 	if err != nil {
-		http.Error(writer, "Invalid request body", http.StatusBadRequest)
+		writeGatewayError(writer, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 	if len(body) > maxBody {
-		http.Error(writer, "Request too large", http.StatusRequestEntityTooLarge)
+		writeGatewayError(writer, "Request too large", http.StatusRequestEntityTooLarge)
 		return
 	}
 	request.Body = io.NopCloser(bytes.NewReader(body))
@@ -252,13 +251,13 @@ func (s *server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	if ruleID, status, err := policy.inspect(request, ip, body); err != nil {
 		s.logger.Error("WAF inspection failed", "exception_type", fmt.Sprintf("%T", err))
-		http.Error(writer, "Inspection unavailable", http.StatusServiceUnavailable)
+		writeGatewayError(writer, "Inspection unavailable", http.StatusServiceUnavailable)
 		return
 	} else if status != 0 {
 		s.emitRequest(request, securityEvent{ID: randomID(), TraceID: trace, IP: ip.String(),
 			EventType: "SIGNATURE_MATCH", RuleID: ruleID, PolicyVersion: policy.version,
 			Action: "DENY", OccurredAt: now})
-		http.Error(writer, "Access denied", status)
+		writeGatewayError(writer, "Access denied", status)
 		return
 	}
 	request.Header.Del("Forwarded")
@@ -310,25 +309,25 @@ func (s *server) ServeManagementHTTP(writer http.ResponseWriter, request *http.R
 		path == "/api/auth/logout" || path == "/api/health" ||
 		strings.HasPrefix(path, "/api/siem/")
 	if !allowed {
-		http.NotFound(writer, request)
+		writeGatewayError(writer, "404 page not found", http.StatusNotFound)
 		return
 	}
 	ip, err := directClientIP(request.RemoteAddr)
 	if err != nil {
-		http.Error(writer, "Invalid connection", http.StatusBadRequest)
+		writeGatewayError(writer, "Invalid connection", http.StatusBadRequest)
 		return
 	}
 	if !s.limits.allow(ip.String()+":management", 20, 40, time.Now().UTC()) {
-		http.Error(writer, "Too many requests", http.StatusTooManyRequests)
+		writeGatewayError(writer, "Too many requests", http.StatusTooManyRequests)
 		return
 	}
 	if request.ContentLength > maxBody {
-		http.Error(writer, "Request too large", http.StatusRequestEntityTooLarge)
+		writeGatewayError(writer, "Request too large", http.StatusRequestEntityTooLarge)
 		return
 	}
 	body, err := io.ReadAll(io.LimitReader(request.Body, maxBody+1))
 	if err != nil || len(body) > maxBody {
-		http.Error(writer, "Invalid request body", http.StatusRequestEntityTooLarge)
+		writeGatewayError(writer, "Invalid request body", http.StatusRequestEntityTooLarge)
 		return
 	}
 	request.Body = io.NopCloser(bytes.NewReader(body))
@@ -356,14 +355,14 @@ type testCandidateRequest struct {
 
 func (s *server) testCandidate(writer http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodPost {
-		http.Error(writer, "Method not allowed", http.StatusMethodNotAllowed)
+		writeGatewayError(writer, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	expected, err := os.ReadFile(s.tokenFile)
 	actual := []byte(request.Header.Get("X-Flare-Service-Token"))
 	if err != nil || len(expected) < 32 || len(expected) > 257 ||
 		subtle.ConstantTimeCompare(bytes.TrimSpace(expected), actual) != 1 {
-		http.Error(writer, "Forbidden", http.StatusForbidden)
+		writeGatewayError(writer, "Forbidden", http.StatusForbidden)
 		return
 	}
 	var input testCandidateRequest
@@ -371,12 +370,12 @@ func (s *server) testCandidate(writer http.ResponseWriter, request *http.Request
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&input); err != nil ||
 		len(input.Fixtures) < 2 || len(input.Fixtures) > 20 {
-		http.Error(writer, "Invalid fixtures", http.StatusBadRequest)
+		writeGatewayError(writer, "Invalid fixtures", http.StatusBadRequest)
 		return
 	}
 	payload, err := json.Marshal(policyPayload{Signatures: []signature{input.Signature}, Blocks: []block{}})
 	if err != nil {
-		http.Error(writer, "Invalid signature", http.StatusBadRequest)
+		writeGatewayError(writer, "Invalid signature", http.StatusBadRequest)
 		return
 	}
 	sum := sha256.Sum256(payload)
@@ -384,14 +383,14 @@ func (s *server) testCandidate(writer http.ResponseWriter, request *http.Request
 		Version: 0, Checksum: hex.EncodeToString(sum[:]), PolicyJSON: string(payload),
 	})
 	if err != nil {
-		http.Error(writer, "Invalid signature", http.StatusBadRequest)
+		writeGatewayError(writer, "Invalid signature", http.StatusBadRequest)
 		return
 	}
 	passed, positive, negative := 0, false, false
 	for _, sample := range input.Fixtures {
 		if !validMethod(sample.HTTPMethod) || !safePath.MatchString(sample.RequestPath) ||
 			(sample.RequestBody != nil && len(*sample.RequestBody) > 256) {
-			http.Error(writer, "Invalid synthetic fixture", http.StatusBadRequest)
+			writeGatewayError(writer, "Invalid synthetic fixture", http.StatusBadRequest)
 			return
 		}
 		var body []byte
@@ -403,7 +402,7 @@ func (s *server) testCandidate(writer http.ResponseWriter, request *http.Request
 		probe.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		rule, status, err := candidate.inspect(probe, netip.MustParseAddr("203.0.113.55"), body)
 		if err != nil {
-			http.Error(writer, "Fixture inspection unavailable", http.StatusServiceUnavailable)
+			writeGatewayError(writer, "Fixture inspection unavailable", http.StatusServiceUnavailable)
 			return
 		}
 		matched := rule == input.Signature.ID && status == http.StatusForbidden
@@ -417,11 +416,10 @@ func (s *server) testCandidate(writer http.ResponseWriter, request *http.Request
 		}
 	}
 	if !positive || !negative {
-		http.Error(writer, "Positive and benign fixtures required", http.StatusBadRequest)
+		writeGatewayError(writer, "Positive and benign fixtures required", http.StatusBadRequest)
 		return
 	}
-	writer.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(writer).Encode(map[string]any{
+	writeGatewayJSON(writer, map[string]any{
 		"passed": passed == len(input.Fixtures), "passed_cases": passed,
 		"total_cases": len(input.Fixtures),
 	})

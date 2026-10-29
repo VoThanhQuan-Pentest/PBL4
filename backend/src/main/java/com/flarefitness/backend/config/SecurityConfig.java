@@ -60,6 +60,8 @@ public class SecurityConfig {
                         // controller's constant-time token comparison.
                         .ignoringRequestMatchers("/internal/v1/prevention/ack"))
                 .cors(Customizer.withDefaults())
+                .headers(headers -> headers.contentSecurityPolicy(csp -> csp.policyDirectives(
+                        "default-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")))
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .exceptionHandling(exceptions -> exceptions
                         .authenticationEntryPoint((request, response, exception) ->

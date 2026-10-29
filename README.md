@@ -119,6 +119,11 @@ checkpoint. Bảng khác commit được ghi `HISTORICAL`, phần trăm hiện t
 thêm `--require-current` để từ chối bảng cũ bằng exit code 2. Số yêu cầu đã có
 kết luận, số yêu cầu đạt và các bản sửa có CI xanh được theo dõi riêng. Không
 cộng các bản sửa hẹp vào tỷ lệ ASVS khi chưa đánh giá lại cả yêu cầu.
+
+Backend API áp dụng CSP mặc định với `default-src 'none'`,
+`object-src 'none'` và `frame-ancestors 'none'`. Gateway bổ sung CSP, `nosniff`
+và chống nhúng cho phản hồi tự sinh như health/lỗi. Phản hồi proxy giữ CSP
+upstream, body, cookie và trạng thái; Nginx cung cấp policy riêng cho giao diện.
 TLS candidate chỉ cho phép TLS 1.2/1.3 với bộ mã AEAD, ưu tiên bộ mã phía server;
 trang lỗi do TLS edge sinh cũng có CSP, chống nhúng và `nosniff`. CSP giao diện
 dùng `base-uri 'none'`; HTML ứng dụng khai báo UTF-8. Nginx chủ động bỏ charset
