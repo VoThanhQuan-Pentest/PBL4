@@ -111,6 +111,14 @@ trình duyệt qua HTTPS có CA tin cậy, DAST giới hạn và pipeline ELK. C
 GitHub được phép khởi tạo project này; báo cáo chi tiết được mã hóa bằng public
 certificate, private key giữ ngoài repository. Thành công của scanner không
 đồng nghĩa đạt toàn bộ 253 yêu cầu ASVS 5.0.0 L1/L2 hoặc qualification model.
+
+Báo cáo tiến độ ASVS phải dùng `python3 scripts/security/asvs_matrix.py progress
+<matrix.json> --checkpoint <execution-checkpoint.json>` với bằng chứng private
+được cung cấp ngoài Git. Lệnh tự đọc Git HEAD, đối chiếu source và số đếm trong
+checkpoint. Bảng khác commit được ghi `HISTORICAL`, phần trăm hiện tại là `null`;
+thêm `--require-current` để từ chối bảng cũ bằng exit code 2. Số yêu cầu đã có
+kết luận, số yêu cầu đạt và các bản sửa có CI xanh được theo dõi riêng. Không
+cộng các bản sửa hẹp vào tỷ lệ ASVS khi chưa đánh giá lại cả yêu cầu.
 TLS candidate chỉ cho phép TLS 1.2/1.3 với bộ mã AEAD, ưu tiên bộ mã phía server;
 trang lỗi do TLS edge sinh cũng có CSP, chống nhúng và `nosniff`. CSP giao diện
 dùng `base-uri 'none'`; HTML ứng dụng khai báo UTF-8. Nginx chủ động bỏ charset

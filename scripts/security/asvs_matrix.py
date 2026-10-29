@@ -7,6 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
 CATALOG = ROOT / 'security/asvs/requirements-5.0.0.csv'
@@ -89,6 +90,60 @@ def validate(matrix, *, strict=False):
             'production_model_qualified': False}
 
 
+def progress(matrix, checkpoint, current_sha, *, require_current=False):
+    """Derive progress from evidence; never present an older assessment as current."""
+    if not isinstance(current_sha, str) or not re.fullmatch('[0-9a-f]{40}', current_sha):
+        raise ValueError('A full current source commit SHA is required')
+    if not isinstance(matrix, dict) or not isinstance(checkpoint, dict):
+        raise ValueError('Matrix and checkpoint must be JSON objects')
+    assessment = validate(matrix)
+    counts = {state: assessment['counts'].get(state, 0) for state in sorted(STATES)}
+    verified = checkpoint.get('verified')
+    cached = verified.get('assessment_progress') if isinstance(verified, dict) else None
+    if not isinstance(cached, dict) or not isinstance(cached.get('counts'), dict):
+        raise ValueError('Checkpoint assessment cache is missing or malformed')
+    cached_counts = cached['counts']
+    if (cached.get('source_sha') != assessment['source_sha']
+            or set(cached_counts) - STATES
+            or any(type(cached_counts.get(state, 0)) is not int
+                   or cached_counts.get(state, 0) != counts[state] for state in STATES)):
+        raise ValueError('Checkpoint assessment cache disagrees with the evidence matrix')
+    if checkpoint.get('pushed_sha') != current_sha:
+        raise ValueError('Checkpoint candidate SHA disagrees with current source; refresh the checkpoint')
+    current = assessment['source_sha'] == current_sha
+    if require_current and not current:
+        raise ValueError('Assessment is historical; current-source progress is not established')
+    applicable = assessment['requirements_total'] - counts['NOT_APPLICABLE']
+    concluded = counts['PASS'] + counts['FAIL']
+    completion = round(100 * concluded / applicable, 1) if applicable else None
+    passed = round(100 * counts['PASS'] / applicable, 1) if applicable else None
+    return {
+        'schema_version': 1,
+        'current_source_sha': current_sha,
+        'snapshot_status': 'CURRENT' if current else 'HISTORICAL',
+        'assessment_snapshot': {
+            'source_sha': assessment['source_sha'], 'counts': counts,
+            'requirements_total': assessment['requirements_total'],
+            'applicable': applicable, 'concluded': concluded,
+            'completion_percent': completion, 'pass_percent': passed,
+        },
+        'current_assessment': {
+            'completion_percent': completion if current else None,
+            'pass_percent': passed if current else None,
+            'asvs_l2_established': current and assessment['asvs_l2_established_in_declared_environment'],
+        },
+        'overall_project_completion_percent': None,
+        'candidate_fixes_and_ci_do_not_promote_requirements': True,
+        'reassessment_required': not current,
+    }
+
+
+def read_document(path):
+    if path.stat().st_size > 8 * 1024 * 1024:
+        raise ValueError('Evidence document exceeds 8 MiB')
+    return json.loads(path.read_text())
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
@@ -97,16 +152,24 @@ def main():
     check = commands.add_parser('validate')
     check.add_argument('matrix', type=Path)
     check.add_argument('--strict', action='store_true')
+    report = commands.add_parser('progress')
+    report.add_argument('matrix', type=Path)
+    report.add_argument('--checkpoint', required=True, type=Path)
+    report.add_argument('--require-current', action='store_true')
     args = parser.parse_args()
     try:
         if args.command == 'seed':
             result = seed(args.sha)
+        elif args.command == 'validate':
+            result = validate(read_document(args.matrix), strict=args.strict)
         else:
-            if args.matrix.stat().st_size > 8 * 1024 * 1024:
-                raise ValueError('Evidence matrix exceeds 8 MiB')
-            result = validate(json.loads(args.matrix.read_text()), strict=args.strict)
+            # Resolve the actual checkout, rather than trusting a caller-supplied "current" SHA.
+            current_sha = subprocess.check_output(
+                ['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True).strip()
+            result = progress(read_document(args.matrix), read_document(args.checkpoint), current_sha,
+                              require_current=args.require_current)
         print(json.dumps(result, indent=2, ensure_ascii=False))
-    except (ValueError, KeyError, TypeError, OSError) as error:
+    except (ValueError, KeyError, TypeError, OSError, subprocess.CalledProcessError) as error:
         parser.exit(2, str(error) + '\n')
 
 
