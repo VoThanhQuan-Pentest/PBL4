@@ -347,6 +347,12 @@ records follow transaction commit and rejections are immediate. They use the
 existing AUDIT console sink, not the model's feature-event outbox. This does not
 claim complete auth/audit transport coverage or alter the model contract.
 
+Password recovery verification also records fixed email-factor verified,
+rejected, rate-limited or error actions in this audit sink. Verified success
+follows reset-grant issuance and transaction commit; it has no authenticated
+actor. Rejections carry no inferred account, expiry or replay label. The reset
+grant, OTP and submitted email never enter these audit fields.
+
 The isolated ASVS workflow opts into `ASVS_CROSS_STREAM_VERIFY=1` when running
 the existing verifier. It appends owned loopback fixtures to the three log
 streams, checks a common `trace.id` and typed ECS identity, and confirms repeated

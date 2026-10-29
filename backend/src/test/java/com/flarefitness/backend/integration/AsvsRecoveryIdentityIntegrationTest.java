@@ -73,6 +73,47 @@ class AsvsRecoveryIdentityIntegrationTest extends ContainerizedIntegrationTest {
         assertThatThrownBy(() -> reset(owner.getEmail(), token)).isInstanceOf(BadRequestException.class);
     }
 
+    @Test void recoveryFactorAuditSurvivesRejectionAndRecordsOnlyCommittedGrantSuccess() {
+        var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger("AUDIT");
+        var previousLevel = logger.getLevel();
+        logger.setLevel(ch.qos.logback.classic.Level.INFO);
+        var captured = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        captured.start(); logger.addAppender(captured);
+        try {
+            User owner = user(null, "Nhan vien");
+            auth.sendForgotPasswordOtp(new OtpRequest(null, owner.getEmail(), null), "192.0.2.185");
+            String code = codes.get(owner.getEmail()); assertThat(code != null).isTrue();
+            String wrong = "000000".equals(code) ? "000001" : "000000";
+            assertThatThrownBy(() -> auth.verifyForgotPasswordOtp(new ForgotPasswordOtpVerifyRequest(owner.getEmail(), wrong)))
+                    .isInstanceOf(BadRequestException.class);
+            assertThatThrownBy(() -> auth.verifyForgotPasswordOtp(new ForgotPasswordOtpVerifyRequest(
+                    "absent-" + UUID.randomUUID() + "@example.test", wrong)))
+                    .isInstanceOf(BadRequestException.class);
+            String grant = auth.verifyForgotPasswordOtp(new ForgotPasswordOtpVerifyRequest(owner.getEmail(), code)).resetToken();
+            assertThatThrownBy(() -> auth.verifyForgotPasswordOtp(new ForgotPasswordOtpVerifyRequest(owner.getEmail(), code)))
+                    .isInstanceOf(BadRequestException.class);
+            var events = captured.list.stream().filter(e -> e.getFormattedMessage()
+                    .startsWith("action=AUTH_PASSWORD_RESET_EMAIL_OTP_")).toList();
+            assertThat(events.stream().filter(e -> e.getFormattedMessage()
+                    .startsWith("action=AUTH_PASSWORD_RESET_EMAIL_OTP_REJECTED outcome=FAILURE actorId=- subjectId=- ")).count()).isEqualTo(3);
+            assertThat(events.stream().filter(e -> e.getFormattedMessage()
+                    .startsWith("action=AUTH_PASSWORD_RESET_EMAIL_OTP_VERIFIED outcome=SUCCESS actorId=- ")).count()).isEqualTo(1);
+            assertThat(events).hasSize(4);
+            // Assert permitted slots rather than printing synthetic secrets on failure.
+            assertThat(events.stream().allMatch(e -> {
+                Object[] fields = e.getArgumentArray();
+                return fields.length == 7 && "-".equals(fields[2])
+                        && ("-".equals(fields[3]) || owner.getId().equals(fields[3]))
+                        && "AUTH_FACTOR".equals(fields[4]) && "EMAIL_OTP".equals(fields[5]);
+            })).isTrue();
+            reset(owner.getEmail(), grant);
+            assertThat(encoder.matches(NEW, users.findActiveById(owner.getId()).orElseThrow().getPassword())).isTrue();
+            assertThatThrownBy(() -> reset(owner.getEmail(), grant)).isInstanceOf(BadRequestException.class);
+        } finally {
+            logger.detachAppender(captured); captured.stop(); logger.setLevel(previousLevel);
+        }
+    }
+
     @Test void anUnexpiredAccountBoundUuidGrantSurvivesTheGeneratorUpgrade() {
         User owner = user(null, "Nhan vien");
         String token = UUID.randomUUID().toString();

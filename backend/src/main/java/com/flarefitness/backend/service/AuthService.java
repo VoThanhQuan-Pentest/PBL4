@@ -272,11 +272,35 @@ public class AuthService {
 
     @Transactional
     public PasswordResetVerificationResponse verifyForgotPasswordOtp(ForgotPasswordOtpVerifyRequest request) {
-        String email = request.email().trim();
-        User user = userRepository.findByEmailIgnoreCaseForUpdate(email)
-                .orElseThrow(() -> new BadRequestException("Ma OTP khong dung hoac da het han."));
-        emailOtpService.verifyRecoveryOtp(user, request.otpCode());
-        return new PasswordResetVerificationResponse(passwordResetTokenStore.issue(user));
+        try {
+            String email = request.email().trim();
+            User user = userRepository.findByEmailIgnoreCaseForUpdate(email)
+                    .orElseThrow(() -> new BadRequestException("Ma OTP khong dung hoac da het han."));
+            emailOtpService.verifyRecoveryOtp(user, request.otpCode());
+            var response = new PasswordResetVerificationResponse(passwordResetTokenStore.issue(user));
+            // A recovery proof authorizes a reset grant, not an authenticated session.
+            recoveryFactorAudit(true, "AUTH_PASSWORD_RESET_EMAIL_OTP_VERIFIED", user.getId());
+            return response;
+        } catch (BadRequestException rejected) {
+            recoveryFactorAudit(false, "AUTH_PASSWORD_RESET_EMAIL_OTP_REJECTED", null);
+            throw rejected;
+        } catch (TooManyRequestsException rejected) {
+            recoveryFactorAudit(false, "AUTH_PASSWORD_RESET_EMAIL_OTP_RATE_LIMITED", null);
+            throw rejected;
+        } catch (RuntimeException failure) {
+            recoveryFactorAudit(false, "AUTH_PASSWORD_RESET_EMAIL_OTP_ERROR", null);
+            throw failure;
+        }
+    }
+
+    private void recoveryFactorAudit(boolean success, String action, String subject) {
+        try {
+            // Keep audit evidence separate from model feature-event counts.
+            if (success) auditLogService.success(action, null, subject, "AUTH_FACTOR", "EMAIL_OTP");
+            else auditLogService.failure(action, null, subject, "AUTH_FACTOR", "EMAIL_OTP");
+        } catch (RuntimeException failure) {
+            LOGGER.warn("Recovery OTP audit delivery failed exceptionType={}", failure.getClass().getSimpleName());
+        }
     }
 
     public CurrentUserResponse getCurrentUser(String username) {

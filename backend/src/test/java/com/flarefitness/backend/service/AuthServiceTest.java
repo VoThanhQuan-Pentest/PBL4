@@ -66,6 +66,118 @@ class AuthServiceTest {
     }
 
     @Test
+    void recoveryProofAuditDoesNotTurnItsOwnerIntoAnAuthenticatedActor() {
+        User owner = recoveryOwner();
+        when(userRepository.findByEmailIgnoreCaseForUpdate(owner.getEmail())).thenReturn(Optional.of(owner));
+        when(passwordResetTokenStore.issue(owner)).thenReturn("owned-opaque-grant");
+        var response = authService.verifyForgotPasswordOtp(recoveryRequest());
+        org.assertj.core.api.Assertions.assertThat(response.resetToken()).isEqualTo("owned-opaque-grant");
+        verify(emailOtpService).verifyRecoveryOtp(owner, "123456");
+        verify(auditLogService).success("AUTH_PASSWORD_RESET_EMAIL_OTP_VERIFIED", null, owner.getId(), "AUTH_FACTOR", "EMAIL_OTP");
+        org.mockito.Mockito.verifyNoMoreInteractions(auditLogService);
+        org.mockito.Mockito.verifyNoInteractions(securityEventService, redisTokenStore, jwtTokenService);
+    }
+
+    @Test
+    void missingRecoveryOwnerHasAnUnassociatedRejectionAndNoGrant() {
+        when(userRepository.findByEmailIgnoreCaseForUpdate("owned@example.test")).thenReturn(Optional.empty());
+        assertThatThrownBy(() -> authService.verifyForgotPasswordOtp(recoveryRequest()))
+                .isInstanceOf(BadRequestException.class).hasMessage("Ma OTP khong dung hoac da het han.");
+        verify(auditLogService).failure("AUTH_PASSWORD_RESET_EMAIL_OTP_REJECTED", null, null, "AUTH_FACTOR", "EMAIL_OTP");
+        org.mockito.Mockito.verifyNoMoreInteractions(auditLogService);
+        org.mockito.Mockito.verifyNoInteractions(emailOtpService, passwordResetTokenStore, securityEventService);
+    }
+
+    @Test
+    void invalidRecoveryProofPreservesItsExceptionAndDoesNotIssueAGrant() {
+        User owner = recoveryOwner();
+        when(userRepository.findByEmailIgnoreCaseForUpdate(owner.getEmail())).thenReturn(Optional.of(owner));
+        var rejected = new BadRequestException("owned rejection");
+        doThrow(rejected).when(emailOtpService).verifyRecoveryOtp(owner, "123456");
+        assertThatThrownBy(() -> authService.verifyForgotPasswordOtp(recoveryRequest())).isSameAs(rejected);
+        verify(auditLogService).failure("AUTH_PASSWORD_RESET_EMAIL_OTP_REJECTED", null, null, "AUTH_FACTOR", "EMAIL_OTP");
+        org.mockito.Mockito.verifyNoMoreInteractions(auditLogService);
+        org.mockito.Mockito.verifyNoInteractions(passwordResetTokenStore, securityEventService);
+    }
+
+    @Test
+    void recoveryVerificationRateLimitRetainsItsOutcomeWithoutClaimingExpiryOrReplay() {
+        User owner = recoveryOwner();
+        when(userRepository.findByEmailIgnoreCaseForUpdate(owner.getEmail())).thenReturn(Optional.of(owner));
+        var rejected = new TooManyRequestsException("owned budget");
+        doThrow(rejected).when(emailOtpService).verifyRecoveryOtp(owner, "123456");
+        assertThatThrownBy(() -> authService.verifyForgotPasswordOtp(recoveryRequest())).isSameAs(rejected);
+        verify(auditLogService).failure("AUTH_PASSWORD_RESET_EMAIL_OTP_RATE_LIMITED", null, null, "AUTH_FACTOR", "EMAIL_OTP");
+        org.mockito.Mockito.verifyNoMoreInteractions(auditLogService);
+        org.mockito.Mockito.verifyNoInteractions(passwordResetTokenStore, securityEventService);
+    }
+
+    @Test
+    void grantStorageFailureIsAnErrorRatherThanASuccessfulRecoveryProof() {
+        User owner = recoveryOwner();
+        when(userRepository.findByEmailIgnoreCaseForUpdate(owner.getEmail())).thenReturn(Optional.of(owner));
+        var unavailable = new IllegalStateException("owned storage unavailable");
+        when(passwordResetTokenStore.issue(owner)).thenThrow(unavailable);
+        assertThatThrownBy(() -> authService.verifyForgotPasswordOtp(recoveryRequest())).isSameAs(unavailable);
+        verify(auditLogService).failure("AUTH_PASSWORD_RESET_EMAIL_OTP_ERROR", null, null, "AUTH_FACTOR", "EMAIL_OTP");
+        org.mockito.Mockito.verifyNoMoreInteractions(auditLogService);
+        org.mockito.Mockito.verifyNoInteractions(securityEventService);
+    }
+
+    @Test
+    void unavailableRecoveryAuditCannotReplaceTheOriginalRejection() {
+        when(userRepository.findByEmailIgnoreCaseForUpdate("owned@example.test")).thenReturn(Optional.empty());
+        doThrow(new IllegalStateException("owned sink unavailable")).when(auditLogService)
+                .failure("AUTH_PASSWORD_RESET_EMAIL_OTP_REJECTED", null, null, "AUTH_FACTOR", "EMAIL_OTP");
+        assertThatThrownBy(() -> authService.verifyForgotPasswordOtp(recoveryRequest()))
+                .isInstanceOf(BadRequestException.class).hasMessage("Ma OTP khong dung hoac da het han.");
+        org.mockito.Mockito.verifyNoInteractions(passwordResetTokenStore, securityEventService);
+    }
+
+    private User recoveryOwner() {
+        User owner = new User(); owner.setId("owned-recovery-account"); owner.setEmail("owned@example.test");
+        return owner;
+    }
+
+    @Test
+    void unavailableRecoveryAuditCannotReplaceTheIssuedGrant() {
+        User owner = recoveryOwner();
+        when(userRepository.findByEmailIgnoreCaseForUpdate(owner.getEmail())).thenReturn(Optional.of(owner));
+        when(passwordResetTokenStore.issue(owner)).thenReturn("owned-opaque-grant");
+        doThrow(new IllegalStateException("owned sink unavailable")).when(auditLogService)
+                .success("AUTH_PASSWORD_RESET_EMAIL_OTP_VERIFIED", null, owner.getId(), "AUTH_FACTOR", "EMAIL_OTP");
+        org.assertj.core.api.Assertions.assertThat(authService.verifyForgotPasswordOtp(recoveryRequest()).resetToken())
+                .isEqualTo("owned-opaque-grant");
+        org.mockito.Mockito.verifyNoInteractions(securityEventService, redisTokenStore, jwtTokenService);
+    }
+
+    @Test
+    void recoveryLookupFailureIsAuditedWithoutCallingProofOrGrantStorage() {
+        var unavailable = new IllegalStateException("owned lookup unavailable");
+        when(userRepository.findByEmailIgnoreCaseForUpdate("owned@example.test")).thenThrow(unavailable);
+        assertThatThrownBy(() -> authService.verifyForgotPasswordOtp(recoveryRequest())).isSameAs(unavailable);
+        verify(auditLogService).failure("AUTH_PASSWORD_RESET_EMAIL_OTP_ERROR", null, null, "AUTH_FACTOR", "EMAIL_OTP");
+        org.mockito.Mockito.verifyNoMoreInteractions(auditLogService);
+        org.mockito.Mockito.verifyNoInteractions(emailOtpService, passwordResetTokenStore, securityEventService);
+    }
+
+    @Test
+    void recoveryProofInfrastructureFailureCannotIssueAGrant() {
+        User owner = recoveryOwner();
+        when(userRepository.findByEmailIgnoreCaseForUpdate(owner.getEmail())).thenReturn(Optional.of(owner));
+        var unavailable = new IllegalStateException("owned verification unavailable");
+        doThrow(unavailable).when(emailOtpService).verifyRecoveryOtp(owner, "123456");
+        assertThatThrownBy(() -> authService.verifyForgotPasswordOtp(recoveryRequest())).isSameAs(unavailable);
+        verify(auditLogService).failure("AUTH_PASSWORD_RESET_EMAIL_OTP_ERROR", null, null, "AUTH_FACTOR", "EMAIL_OTP");
+        org.mockito.Mockito.verifyNoMoreInteractions(auditLogService);
+        org.mockito.Mockito.verifyNoInteractions(passwordResetTokenStore, securityEventService);
+    }
+
+    private com.flarefitness.backend.dto.auth.ForgotPasswordOtpVerifyRequest recoveryRequest() {
+        return new com.flarefitness.backend.dto.auth.ForgotPasswordOtpVerifyRequest("owned@example.test", "123456");
+    }
+
+    @Test
     void loginRejectsDisabledAccountEvenWhenPasswordMatches() {
         User user = new User();
         user.setId("user-1");
