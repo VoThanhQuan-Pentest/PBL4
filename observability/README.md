@@ -295,6 +295,49 @@ ownership change or signal fails logrotate visibly. The scheduled runtime
 workflow rotates while Filebeat is active and requires the events on both sides
 of the rotation to arrive exactly once.
 
+## Logging inventory (candidate source, 2026-10-29)
+
+This inventory describes the shipped configuration, not an inspection of the
+running lab or an ASVS qualification. Operators own host permissions, Docker
+logging policy and retention verification; SOC owns investigation use. A value
+marked **unspecified** is an assessment gap, not unlimited retention approval.
+Database workflow/history and model artifacts are not Elasticsearch evidence.
+
+| Component / events | Format, destination and use | Access boundary | Retention in source |
+| --- | --- | --- | --- |
+| Nginx public/default virtual hosts: requests, status, detection signals | `flare_json`, `/var/log/nginx/access.json.log`; Filebeat → `logs-nginx.access-lab`; request/trace investigation | Writer UID101; shared logs group1000, files0640; Filebeat mount read-only; Elastic reader roles | AWS host `logrotate` daily/max10M, seven rotations; Elastic access stream7d. Host rotation is not automatically installed by local Compose. |
+| Nginx native diagnostics | Fixed-code JSON, `/var/log/nginx/native-errors.json.log` and Docker stderr; operational error categories | PID1 classifies native stderr before persistence; UID101, files0640; Docker/host operators | Same AWS `*.log` rotation; Docker stderr retention **unspecified** in Compose. No Filebeat input for this file. Historical raw `error.log` is preserved, not rewritten. |
+| Gateway prevention events: rule/block/limit observations | NDJSON, `PREVENTION_EVENT_FILE` (`/var/log/flare/prevention-events.ndjson` in local topology); Filebeat → `logs-flare.prevention-lab` | Gateway writer; shared log volume; Filebeat read-only; SOC/Admin API and Elastic stream privileges | Writer rotates64MiB; rotated files older than7d pruned during rotation; active file remains. Elastic stream30d. |
+| Gateway operational errors | Go slog to stderr; server logger JSON, process startup logger default text; startup/policy/listener diagnosis | Docker/host operators; no prevention-event ingestion assumption | Docker retention **unspecified** in Compose. |
+| Backend security events: auth, requests and sensitive actions | MySQL outbox → `security-events.ndjson`; explicit JSON export → Filebeat → `logs-flare.security-lab`; investigation and feature aggregation | App writer; files0640; Filebeat read-only; SOC/Admin APIs and limited Elastic reader | Configured minimum30d; only processed DB events/scored windows purged. Rotated export files after retention+7d; active file remains. Elastic stream30d. |
+| Backend audit/security/exception diagnostics | SLF4J console, including `AuditLogService` key=value audit entries; business audit and operational diagnosis | Docker/host operators; console is not declared ELK evidence | Docker retention **unspecified**. Some unexpected exceptions include Throwable; data classification/provenance still under review. |
+| SOC state: incident notes/history, actions and ingestion checkpoint | MySQL entities; workflow/audit and pipeline health. Checkpoint diagnostic is also returned in `/api/siem/status` and workspace | Server requires Admin/SOC L1/L2 for SIEM namespace; DB operators separately privileged | General notes/history/checkpoint expiry **unspecified**; no automatic deletion implied by security-event retention. |
+| Parser quarantine | Logstash-normalized JSON → `logs-nginx.parse_error-lab`, `logs-flare.security_error-lab`, `logs-flare.prevention_error-lab`; failed-schema investigation | Logstash writer; limited Elastic reader roles | Template lifecycle3d; actual lifecycle application must be verified. |
+| Filebeat / Logstash / Elasticsearch / Kibana operational diagnostics | Service console via Docker; transport, queue, index and UI troubleshooting | Docker/host operators; service credentials/keystores separate from browser and JavaFX | Docker retention **unspecified**; queue storage is recovery state, not a time-based log-retention guarantee. |
+| MySQL / Redis service diagnostics | Default container console; database/cache availability. Audit/general-query logging is not asserted enabled | Docker/host and DB/cache operators; network/credential boundaries separate | Docker retention **unspecified**; volume lifecycle is not a log deletion policy. |
+| Lab mail service | Mailpit console and test mail UI/storage; delivery diagnosis. Message bodies/OTPs are sensitive application data, not ELK evidence | Local-only lab UI binding and host/operator access; production SMTP remains outside this inventory | Console/mail-store expiry **unspecified**; do not delete protected mail/account state as log cleanup. |
+| UEBA worker diagnostics and job state | Uvicorn console; worker-owned job receipts in model directory. Operational/model-job state, not fabricated ELK evidence | Worker internal service authentication; container/model-volume operator access | Console/job-receipt expiry **unspecified**. No model/training files may be deleted to implement log retention. |
+| JavaFX client | No application-owned persistent log sink found in `desktop-client/src/main/java`; launch/runtime console remains possible | Local desktop/session operator | Launcher/runtime retention **unspecified**; passwords/cookies must not be persisted. |
+| Operator commands / CI assessment output | Console and explicitly selected runtime/report artifacts; verification and release evidence, separate from live ELK | Operator files require private access; CI artifacts follow repository/platform access and must contain only approved synthetic or protected output | CI upload expiry follows each workflow's `retention-days`; local operator receipt expiry **unspecified**. Backups, credentials and model artifacts are not disposable logs. |
+
+Source anchors: [Nginx configuration](../nginx/nginx.conf),
+[native diagnostic boundary](../nginx/diagnostics/main.go),
+[host rotation](logrotate/nginx-access), [Filebeat inputs](filebeat/filebeat.yml),
+[stream templates](elasticsearch/templates/), [gateway rotation](../gateway/rotate.go),
+[security-event export](../backend/src/main/java/com/flarefitness/backend/service/siem/SecurityEventExportWorker.java),
+[security-event retention](../backend/src/main/java/com/flarefitness/backend/service/siem/SecurityEventRetentionWorker.java),
+[audit producer](../backend/src/main/java/com/flarefitness/backend/service/AuditLogService.java)
+and [base topology](../docker-compose.yml).
+
+Queries are redacted in Nginx access JSON; raw path/User-Agent are still in that
+contract and require their own classification review. Native diagnostic text
+is not retained by the candidate classifier. Structured backend events export
+session pseudonyms/auth fingerprints rather than bearer tokens. These controls
+do not prove every producer or exception message safe. Do not send request
+bodies, cookies, passwords, OTPs or authorization headers to any sink. Do not
+change Docker logging/rotation on the running stack merely to satisfy this
+inventory: define and test the missing operator policy before rollout.
+
 ## Redis volume migration
 
 Redis uses the declared project volume `redis-data`; losing it invalidates live
