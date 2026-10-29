@@ -338,6 +338,14 @@ bodies, cookies, passwords, OTPs or authorization headers to any sink. Do not
 change Docker logging/rotation on the running stack merely to satisfy this
 inventory: define and test the missing operator policy before rollout.
 
+The isolated ASVS workflow opts into `ASVS_CROSS_STREAM_VERIFY=1` when running
+the existing verifier. It appends owned loopback fixtures to the three log
+streams, checks a common `trace.id` and typed ECS identity, and confirms repeated
+backend/gateway deliveries remain single documents. Gateway fixtures use
+`CRS_SIGNAL`/`OBSERVE` without `LIVE_GATEWAY` provenance; they are not signature
+strikes or model decisions. This opt-in is disabled for ordinary verification
+and must not be enabled against protected/live logs to create assessment data.
+
 ## Redis volume migration
 
 Redis uses the declared project volume `redis-data`; losing it invalidates live

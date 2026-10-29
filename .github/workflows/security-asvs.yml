@@ -115,7 +115,7 @@ jobs:
       - name: Run bounded DAST against predefined synthetic-account GET targets
         run: python3 scripts/security/run_zap.py
       - name: Verify ELK evidence, GeoIP, queues and rule delivery after browser and DAST checks
-        run: observability/scripts/local-lab.sh verify
+        run: ASVS_CROSS_STREAM_VERIFY=1 observability/scripts/local-lab.sh verify
       - name: Encrypt diagnostics without publishing raw sessions or findings
         if: always()
         run: python3 scripts/security/collect_ci_evidence.py

@@ -145,6 +145,50 @@ sleep 2
 [ "$(trace_count "$duplicate_trace")" -eq 1 ] || fail deduplication 'same trace.id created more than one document'
 pass deduplication 'two deliveries with the same trace.id produced one document'
 
+# Opt-in for the disposable ASVS runner. These are pipeline fixtures, not
+# authenticated activity, model decisions or signature evidence.
+if [ "${ASVS_CROSS_STREAM_VERIFY:-0}" = 1 ]; then
+  correlation_trace=$(openssl rand -hex 16)
+  security_id="verify-security-${correlation_trace}"
+  prevention_id=$(openssl rand -hex 16)
+  event "$correlation_trace" 127.0.0.1 200 /pipeline-correlation | inject_line
+  security_fixture=$(jq -nc --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --arg id "$security_id" --arg trace "$correlation_trace" \
+    '{"@timestamp":$timestamp,event:{id:$id,dataset:"flare.security",type:"HTTP_REQUEST",action:"API_REQUEST",outcome:"SUCCESS"},trace:{id:$trace},source:{ip:"127.0.0.1"},observer:{type:"backend"},flare:{synthetic:true,demo_label:"PIPELINE_VERIFY"},http:{request:{method:"GET"},response:{status_code:200}}}')
+  prevention_fixture=$(jq -nc --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --arg id "$prevention_id" --arg trace "$correlation_trace" \
+    '{id:$id,trace_id:$trace,ip_address:"127.0.0.1",event_type:"CRS_SIGNAL",action:"OBSERVE",policy_version:0,count:1,occurred_at:$timestamp,provenance:"PIPELINE_VERIFY",observer:"gateway"}')
+  for _ in 1 2; do
+    printf '%s\n' "$security_fixture" | compose exec -T app sh -c 'tee -a /var/log/flare/security-events.ndjson >/dev/null'
+    printf '%s\n' "$prevention_fixture" | compose exec -T app sh -c 'tee -a /var/log/flare/prevention-events.ndjson >/dev/null'
+  done
+  for stream in nginx.access flare.security flare.prevention; do
+    correlation_doc=''
+    for _ in $(seq 1 30); do
+      correlation_doc=$(jq -nc --arg trace "$correlation_trace" '{size:10,track_total_hits:true,query:{term:{"trace.id":$trace}}}' | \
+        elastic_api POST "/logs-${stream}-lab/_search" 2>/dev/null || true)
+      if printf '%s' "$correlation_doc" | jq -e '.hits.total.value==1' >/dev/null 2>&1; then break; fi
+      sleep 1
+    done
+    printf '%s' "$correlation_doc" | jq -e --arg trace "$correlation_trace" --arg stream "$stream" \
+      '.hits.total.value==1 and .hits.hits[0]._source.trace.id==$trace and
+       .hits.hits[0]._source.source.ip=="127.0.0.1" and
+       (.hits.hits[0]._source."@timestamp"|type=="string") and
+       .hits.hits[0]._source.data_stream.dataset==$stream' >/dev/null || \
+      fail cross_stream_correlation "${stream} did not preserve a single trace-linked ECS document"
+    if [ "$stream" = flare.security ]; then
+      printf '%s' "$correlation_doc" | jq -e --arg id "$security_id" \
+        '.hits.hits[0]._id==$id and .hits.hits[0]._source.event.id==$id and .hits.hits[0]._source.observer.type=="backend"' >/dev/null || fail cross_stream_correlation 'backend event identity/observer changed'
+    elif [ "$stream" = flare.prevention ]; then
+      printf '%s' "$correlation_doc" | jq -e --arg id "$prevention_id" \
+        '.hits.hits[0]._id==$id and .hits.hits[0]._source.event.id==$id and
+         .hits.hits[0]._source.observer.type=="gateway" and .hits.hits[0]._source.event.action=="OBSERVE" and
+         .hits.hits[0]._source.flare.prevention.provenance==null' >/dev/null || fail cross_stream_correlation 'gateway fixture identity or non-live provenance changed'
+    fi
+  done
+  pass cross_stream_correlation 'three ECS streams share one trace; repeated backend/gateway deliveries retain one event each; no live signature provenance'
+fi
+
 # Filebeat disk queue survives a Logstash outage; restart remains idempotent.
 compose stop logstash >/dev/null
 queue_prefix="verify-queue-$(date +%s)"
