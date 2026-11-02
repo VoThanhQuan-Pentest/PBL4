@@ -12,7 +12,17 @@ COPY nginx/diagnostics/ ./
 RUN GOMAXPROCS=1 GOGC=40 go test -p 1 ./... \
     && GOMAXPROCS=1 GOGC=40 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nginx-diagnostics .
 
-FROM nginx:1.30.6-alpine-slim@sha256:dede8895648b461178c3bc604f7eed4423efe5220b2c4d839f5eb3d34ac3f8f7
+FROM nginx:1.30.6-alpine-slim@sha256:dede8895648b461178c3bc604f7eed4423efe5220b2c4d839f5eb3d34ac3f8f7 AS diagnostics-runtime
+
+# The CI TLS terminator reuses the same native-log boundary without building
+# the frontend. Callers provide a bounded writable /var/log/nginx sink.
+COPY --from=diagnostics-build /out/nginx-diagnostics /usr/local/bin/nginx-diagnostics
+USER 101:101
+ENTRYPOINT ["/usr/local/bin/nginx-diagnostics"]
+CMD ["nginx", "-g", "daemon off;"]
+
+FROM diagnostics-runtime AS application
+USER 0:0
 
 # Only this variable is substituted in the nginx template. Leaving the rest of
 # nginx's $variables untouched is essential for request-time evaluation.
@@ -23,7 +33,6 @@ ENV NGINX_TRUSTED_PROXY_CIDR=192.0.2.1/32 \
 COPY nginx/nginx.conf /etc/nginx/templates/default.conf.template
 COPY nginx/security-headers.conf /etc/nginx/snippets/security-headers.conf
 COPY nginx/10-validate-trusted-proxy-cidr.sh /docker-entrypoint.d/10-validate-trusted-proxy-cidr.sh
-COPY --from=diagnostics-build /out/nginx-diagnostics /usr/local/bin/nginx-diagnostics
 COPY --from=frontend-build /frontend/dist /usr/share/nginx/html
 
 RUN chmod 0555 /docker-entrypoint.d/10-validate-trusted-proxy-cidr.sh \

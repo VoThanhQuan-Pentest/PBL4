@@ -573,6 +573,10 @@ Các lớp bảo vệ chính của project:
   cố định, không giữ nội dung request/header/path thô. PID1 chuyển tiếp signal
   và mở lại log khi nhận USR1. Log cũ được giữ nguyên; quy tắc này không che dữ
   liệu tùy ý trong path/User-Agent của access log hoặc thay thế đánh giá ASVS.
+  TLS-edge của profile ASVS CI dùng cùng supervisor qua target
+  `diagnostics-runtime`, với log tạm xoay vòng hai file tối đa 1 MiB/file trong
+  tmpfs 4 MiB; không cần build frontend cho riêng target này. Xoay vòng nội bộ
+  chỉ bật ở TLS-edge CI; ứng dụng giữ cơ chế logrotate/USR1 hiện có.
 - Production profile fail-fast khi phát hiện JWT, cookie, CORS, datasource,
   Redis, SMTP hoặc trusted-proxy configuration không an toàn.
 

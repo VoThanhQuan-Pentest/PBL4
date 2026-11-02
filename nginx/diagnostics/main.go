@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"regexp"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -89,19 +90,29 @@ func consume(r io.Reader, emit func(diagnostic) error) error {
 }
 
 type sink struct {
-	mu   sync.Mutex
-	file *os.File
+	mu       sync.Mutex
+	file     *os.File
+	path     string
+	maxBytes int64
+	size     int64
 }
 
 func (s *sink) reopen() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.reopenLocked()
+}
+
+func (s *sink) reopenLocked() error {
+	if s.path == "" {
+		s.path = logPath
+	}
 	// Do not follow a replaced symlink in the writable log directory.
-	fd, err := syscall.Open(logPath, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_APPEND|syscall.O_NOFOLLOW|syscall.O_CLOEXEC|syscall.O_NONBLOCK, 0640)
+	fd, err := syscall.Open(s.path, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_APPEND|syscall.O_NOFOLLOW|syscall.O_CLOEXEC|syscall.O_NONBLOCK, 0640)
 	if err != nil {
 		return err
 	}
-	f := os.NewFile(uintptr(fd), logPath)
+	f := os.NewFile(uintptr(fd), s.path)
 	info, err := f.Stat()
 	if err != nil || !info.Mode().IsRegular() {
 		f.Close()
@@ -109,6 +120,7 @@ func (s *sink) reopen() error {
 	}
 	old := s.file
 	s.file = f
+	s.size = info.Size()
 	if old != nil {
 		old.Close()
 	}
@@ -122,18 +134,51 @@ func (s *sink) emit(d diagnostic) error {
 		return err
 	}
 	b = append(b, '\n')
-	if _, err = s.file.Write(b); err != nil {
+	if s.maxBytes > 0 {
+		if int64(len(b)) > s.maxBytes {
+			return errors.New("diagnostic exceeds log limit")
+		}
+		if s.size+int64(len(b)) > s.maxBytes {
+			// Only opt-in ephemeral CI sinks rotate internally. Default application
+			// logging retains its existing external logrotate/USR1 contract.
+			if err = os.Rename(s.path, s.path+".1"); err != nil {
+				return err
+			}
+			if err = s.reopenLocked(); err != nil {
+				return err
+			}
+		}
+	}
+	n, err := s.file.Write(b)
+	s.size += int64(n)
+	if err != nil {
 		return err
 	}
 	_, err = os.Stderr.Write(b)
 	return err
 }
 
+func configuredLogLimit(value string) (int64, error) {
+	if value == "" || value == "0" {
+		return 0, nil
+	}
+	n, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || n < 4096 || n > 16*1024*1024 {
+		return 0, errors.New("invalid diagnostic log limit")
+	}
+	return n, nil
+}
+
 func run(args []string) int {
 	if len(args) == 0 {
 		return 64
 	}
-	var output sink
+	limit, err := configuredLogLimit(os.Getenv("NGINX_DIAGNOSTICS_MAX_BYTES"))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Invalid Nginx diagnostic log limit")
+		return 64
+	}
+	output := sink{maxBytes: limit}
 	if err := output.reopen(); err != nil {
 		fmt.Fprintln(os.Stderr, "Nginx diagnostic sink unavailable")
 		return 111

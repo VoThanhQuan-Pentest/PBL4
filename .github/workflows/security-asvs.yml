@@ -98,7 +98,7 @@ jobs:
             -f docker-compose.yml -f docker-compose.e2e.yml \
             -f observability/docker-compose.monitor.yml -f observability/docker-compose.local.yml \
             -f security/asvs/docker-compose.tls.yml -f "$RUNNER_TEMP/asvs-tls-preflight.yml" \
-            run --rm --no-deps tls-edge -t -c /etc/nginx/asvs.conf
+            run --rm --no-deps --build tls-edge nginx -t -c /etc/nginx/asvs.conf
       - name: Start the existing full-stack composition with ASVS resource limits
         run: |
           observability/scripts/local-lab.sh up

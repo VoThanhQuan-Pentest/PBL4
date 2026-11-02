@@ -33,6 +33,14 @@ class TopologyTest(unittest.TestCase):
             ports = config['services'][service]['ports']
             self.assertTrue(any(p['host_ip'] == '127.0.0.1' and str(p['published']) == str(port) for p in ports))
         self.assertTrue(config['services']['tls-edge']['read_only'])
+        edge = config['services']['tls-edge']
+        self.assertEqual('diagnostics-runtime', edge['build']['target'])
+        self.assertEqual(['/usr/local/bin/nginx-diagnostics'], edge['entrypoint'])
+        self.assertEqual('nginx', edge['command'][0])
+        self.assertEqual('101:101', edge['user'])
+        self.assertEqual('1048576', edge['environment']['NGINX_DIAGNOSTICS_MAX_BYTES'])
+        self.assertTrue(any(item.startswith('/var/log/nginx:') and 'size=4m' in item
+                            and 'uid=101' in item and 'gid=101' in item for item in edge['tmpfs']))
         self.assertEqual('true', config['services']['app']['environment']['APP_LOGIN_OTP_ENABLED'])
         self.assertEqual('900', config['services']['app']['environment']['APP_SESSION_IDLE_SECONDS'])
         self.assertEqual('28800', config['services']['app']['environment']['APP_JWT_EXPIRATION_SECONDS'])
