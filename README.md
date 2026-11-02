@@ -294,6 +294,34 @@ Luồng chính:
 5. Khi bật profile observability, access log được chuyển qua pipeline Elastic
    mà không cần publish Elasticsearch hoặc Logstash ra host.
 
+### Các kênh xác thực của gateway và backend
+
+Web và JavaFX dùng cùng `/api/auth/login` rồi `/api/auth/login/otp` khi bật
+`APP_LOGIN_OTP_ENABLED=true`. Cấu hình ASVS riêng bắt buộc cờ này; chế độ local
+tương thích tắt OTP không được tính là đạt yêu cầu nhiều yếu tố. Cookie và
+Bearer token đều đi qua cùng kiểm tra JWT, Redis allowlist, tài khoản và
+`auth_version` ở backend. Cổng phục hồi `8089` chỉ chuyển tiếp các route đã
+nêu ở phần đăng nhập; backend vẫn kiểm tra CSRF và quyền SOC.
+
+Kênh máy dùng `X-Flare-Service-Token`, độc lập với phiên người dùng:
+
+| Bên gọi → bên nhận | Route | Xác thực và phạm vi |
+| --- | --- | --- |
+| Gateway → backend | `GET /internal/v1/prevention/policy` | Đọc policy; backend so sánh token với tệp cấu hình bằng phép so sánh thời gian hằng. Backend không publish cổng host trong các Compose được mô tả ở đây. |
+| Gateway → backend | `POST /internal/v1/prevention/ack` | Cùng kiểm tra token trước khi ghi xác nhận policy. Đây là route máy được miễn CSRF, không phải miễn xác thực. |
+| Backend → gateway | `POST /internal/v1/prevention/test` | Kiểm tra fixture của signature với token; không cấp JWT người dùng. Route được xử lý trước WAF trên listener `8082` dùng chung với traffic công khai, không phải trên cổng phục hồi riêng. |
+
+Các overlay gateway mount cùng tệp token bên ngoài Git vào
+`/run/flare-secrets/prevention.token` ở chế độ chỉ đọc. Backend dùng
+`SIEM_PREVENTION_SERVICE_TOKEN_FILE`, gateway dùng `PREVENTION_TOKEN_FILE`;
+người vận hành quản lý tệp này, không đưa giá trị vào tài liệu hoặc log.
+Thiếu/sai token bị từ chối; backend trả `503` nếu không đọc được tệp, gateway
+trả `403`. Không coi tiền tố `/internal/` là cơ chế hạn chế truy cập: route
+kiểm tra fixture vẫn nằm trên listener được publish. Token máy không thay
+thế quyền người dùng trên `/api/siem/**`. Vòng đời cấp, xoay và thu hồi token
+cùng bảo vệ đường truyền nội bộ cần đánh giá riêng; bảng này mô tả hành vi
+hiện có, không chứng nhận chúng đã đạt toàn bộ ASVS.
+
 ## Công nghệ sử dụng
 
 | Lớp | Công nghệ | Vai trò |

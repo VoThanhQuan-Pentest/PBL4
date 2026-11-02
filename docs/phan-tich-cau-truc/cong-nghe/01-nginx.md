@@ -80,11 +80,16 @@ limit_req_zone $binary_remote_addr zone=api_limit:10m rate=30r/s;
 limit_req zone=api_limit burst=60 nodelay;
 ```
 
-- Mỗi IP được duy trì trung bình `10 request/giây`.
-- Cho phép burst ngắn tối đa `20` request.
+- Mỗi IP được duy trì trung bình `30 request/giây`.
+- Cho phép burst ngắn tối đa `60` request.
 - Khi vượt giới hạn, Nginx có thể trả HTTP `429` trước khi request tới backend.
 
-Đây là rate limit chung cho `/api/`. Ngoài ra backend còn có rate limit đăng nhập sai bằng Redis, tối đa mặc định `5` lần/phút/IP.
+Đây là rate limit chung cho `/api/`. Trước khi kiểm tra mật khẩu, backend dùng
+Redis đặt chỗ nguyên tử cho mỗi lần thử đăng nhập trong hai bộ đếm theo IP và
+tên đăng nhập chuẩn hóa, mặc định tối đa `5` lần/phút cho mỗi bộ đếm. Đăng nhập
+thành công chỉ xóa bộ đếm tài khoản, không xóa bộ đếm IP dùng chung. OTP đăng
+nhập có ngân sách riêng: tối đa năm lần sai trong 300 giây theo tài khoản;
+yêu cầu challenge mới không xóa số lần sai này.
 
 ### 10.4. Tác dụng thực tế
 
