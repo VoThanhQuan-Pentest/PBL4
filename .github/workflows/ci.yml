@@ -315,7 +315,9 @@ jobs:
           docker build --pull=false --target diagnostics-runtime --tag flare-asvs-tls-edge:ci --file nginx/Dockerfile .
           python3 -m unittest discover -s scripts/security -p 'test_tls_edge.py' -v
       - name: Validate Compose interpolation
-        run: sh scripts/verify-compose-hardening.sh
+        run: |
+          python3 -m unittest discover -s scripts/security -p 'test_dockerfile_pins.py' -v
+          sh scripts/verify-compose-hardening.sh
       - name: Exercise Docker ownership and logrotate regressions
         env:
           RUNTIME_REGRESSION_PROJECT_NAME: pbl4-regression-${{ github.run_id }}-${{ github.run_attempt }}

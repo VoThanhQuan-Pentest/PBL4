@@ -72,13 +72,8 @@ assert_digest_pins() {
     fail "All Compose runtime images must use immutable SHA-256 digests."
   fi
 
-  if awk '
-    $1 == "FROM" && $2 !~ /@sha256:/ {
-      print FILENAME ":" FNR ": base image is not digest pinned: " $0
-      invalid = 1
-    }
-    END { exit invalid }
-  ' backend/Dockerfile nginx/Dockerfile observability/tests/logrotate/Dockerfile; then
+  if awk -f "$ROOT_DIR/scripts/security/check_dockerfile_pins.awk" \
+      backend/Dockerfile nginx/Dockerfile observability/tests/logrotate/Dockerfile; then
     :
   else
     fail "All Dockerfile base images must use immutable SHA-256 digests."
