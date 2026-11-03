@@ -151,8 +151,11 @@ public class RedisTokenStore {
                 tokens.forEach(member -> includingIdle.add(idleKey(isFingerprint(member) ? member : fingerprint(member))));
                 redisTemplate.delete(includingIdle);
             } else redisTemplate.delete(tokenKeys);
+            // Remove only this snapshot: a concurrent login may have registered
+            // another session since SMEMBERS. Deleting the entire index would
+            // leave that live session unreachable by future bulk revocations.
+            redisTemplate.opsForSet().remove(userKey, tokens.toArray());
         }
-        redisTemplate.delete(userKey);
     }
 
     private String fingerprint(String token) {

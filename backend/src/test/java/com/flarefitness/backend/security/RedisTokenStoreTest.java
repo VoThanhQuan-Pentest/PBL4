@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 
 import java.time.Duration;
@@ -64,6 +65,9 @@ class RedisTokenStoreTest {
                 .contains("auth:token:" + legacyRawToken)
                 .contains("auth:token:" + TokenFingerprint.sha256(legacyRawToken))
                 .contains("auth:token:" + currentFingerprint);
-        verify(redisTemplate).delete("auth:user-tokens:alice");
+        ArgumentCaptor<Object[]> removed = ArgumentCaptor.forClass(Object[].class);
+        verify(setOperations).remove(eq("auth:user-tokens:alice"), removed.capture());
+        assertThat(removed.getValue()).containsExactlyInAnyOrder(legacyRawToken, currentFingerprint);
+        verify(redisTemplate, never()).delete("auth:user-tokens:alice");
     }
 }

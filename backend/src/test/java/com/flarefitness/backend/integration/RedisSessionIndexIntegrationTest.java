@@ -1,6 +1,11 @@
 package com.flarefitness.backend.integration;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.AdditionalAnswers.delegatesTo;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.spy;
 
 import com.flarefitness.backend.security.RedisTokenStore;
 import com.flarefitness.backend.security.TokenFingerprint;
@@ -15,6 +20,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.core.env.Environment;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.SetOperations;
 
 @SpringBootTest
 class RedisSessionIndexIntegrationTest extends ContainerizedIntegrationTest {
@@ -99,6 +105,57 @@ class RedisSessionIndexIntegrationTest extends ContainerizedIntegrationTest {
         sessions.revokeAll("Alice");
         assertThat(sessions.contains("long-session")).isFalse();
         assertThat(sessions.contains("short-session")).isFalse();
+    }
+
+    @Test void sessionRegisteredAfterSnapshotRemainsRevocable() {
+        assertConcurrentRegistrationRemainsRevocable(0, false, false);
+    }
+
+    @Test void idleSessionRegisteredAfterSnapshotRemainsRevocable() {
+        assertConcurrentRegistrationRemainsRevocable(15, false, false);
+    }
+
+    @Test void sessionRegisteredAfterEmptySnapshotRemainsRevocable() {
+        assertConcurrentRegistrationRemainsRevocable(0, true, false);
+    }
+
+    @Test void legacySnapshotCleanupPreservesNewSessionRegistration() {
+        assertConcurrentRegistrationRemainsRevocable(0, false, true);
+    }
+
+    private void assertConcurrentRegistrationRemainsRevocable(long idleSeconds, boolean empty, boolean legacy) {
+        sessions = new RedisTokenStore(redis, tokenPrefix, userPrefix, idleSeconds);
+        if (!empty) {
+            if (legacy) {
+                redis.opsForValue().set(tokenPrefix + "old-session", "Alice", Duration.ofSeconds(600));
+                redis.opsForSet().add(userPrefix + "alice", "old-session");
+            } else sessions.save("old-session", "Alice", 600);
+        }
+        // Real Redis operations, with a deterministic competing save immediately
+        // after SMEMBERS returns and before the revoker deletes its snapshot.
+        var interceptedRedis = spy(redis);
+        @SuppressWarnings("unchecked")
+        SetOperations<String, String> sets = mock(SetOperations.class, delegatesTo(redis.opsForSet()));
+        doReturn(sets).when(interceptedRedis).opsForSet();
+        doAnswer(invocation -> {
+            var snapshot = redis.opsForSet().members(userPrefix + "alice");
+            sessions.save("new-session", "Alice", 600);
+            return snapshot;
+        }).when(sets).members(userPrefix + "alice");
+
+        new RedisTokenStore(interceptedRedis, tokenPrefix, userPrefix, idleSeconds).revokeAll("ALICE");
+
+        assertThat(sessions.contains("old-session")).isFalse();
+        assertThat(sessions.contains("new-session")).isTrue();
+        assertThat(redis.opsForSet().members(userPrefix + "alice"))
+                .containsExactly(TokenFingerprint.sha256("new-session"));
+        if (legacy) assertThat(redis.getExpire(userPrefix + "alice")).isEqualTo(-1L);
+        else assertLongIndex();
+        sessions.revokeAll("Alice");
+        assertThat(sessions.contains("new-session")).isFalse();
+        assertThat(redis.hasKey(userPrefix + "alice")).isFalse();
+        if (idleSeconds > 0) assertThat(redis.hasKey(tokenPrefix + "idle:"
+                + TokenFingerprint.sha256("new-session"))).isFalse();
     }
 
     private void assertLongIndex() {
