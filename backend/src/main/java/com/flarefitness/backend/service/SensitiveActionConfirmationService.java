@@ -77,7 +77,9 @@ public class SensitiveActionConfirmationService {
     public ActionConfirmationDtos.Policy status(String username, ActionConfirmationDtos.Operation operation) {
         User user = users.findByUsernameIgnoreCase(username).orElseThrow(this::missing);
         boolean required = operation == ActionConfirmationDtos.Operation.EMAIL_CHANGE
-                ? policy.requiresEmailChangeConfirmation(user) : policy.requiresConfirmation(user);
+                ? policy.requiresEmailChangeConfirmation(user)
+                : operation == ActionConfirmationDtos.Operation.PASSWORD_CHANGE
+                        ? policy.requiresPasswordChangeConfirmation(user) : policy.requiresConfirmation(user);
         return new ActionConfirmationDtos.Policy(required, contactAvailable(user),
                 operation == null ? SensitiveActionPolicy.ID : SensitiveActionPolicy.policyId(operation.name()));
     }
@@ -220,7 +222,7 @@ public class SensitiveActionConfirmationService {
 
     private void requirePolicy(User user, String operation) {
         boolean required = "EMAIL_CHANGE".equals(operation) ? policy.requiresEmailChangeConfirmation(user)
-                : "PASSWORD_CHANGE".equals(operation) && policy.requiresConfirmation(user);
+                : "PASSWORD_CHANGE".equals(operation) && policy.requiresPasswordChangeConfirmation(user);
         if (!required) throw new ConflictException("Xac nhan thao tac chua duoc bat cho tai khoan nay.");
     }
     private boolean postloginApplies(Actor actor) {

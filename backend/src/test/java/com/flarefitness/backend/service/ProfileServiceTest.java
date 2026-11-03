@@ -226,4 +226,22 @@ class ProfileServiceTest {
         verify(emailOtpService, never()).verifyOtp(any(), any(), any());
         org.assertj.core.api.Assertions.assertThat(user.getEmail()).isEqualTo("i@example.test");
     }
+    @Test void loginMfaPasswordGuardRequiresConfirmationOutsideTheTrialAndAllowsConfirmedCommit() {
+        User user = new User(); user.setId("ordinary"); user.setUsername("owner"); user.setPassword("old-hash"); user.setAuthVersion(4L);
+        when(userRepository.findByUsernameIgnoreCaseForUpdate("owner")).thenReturn(Optional.of(user));
+        profileService = new ProfileService(userRepository, customerRepository, passwordEncoder, authService,
+                emailOtpService, phoneNumberService, redisTokenStore, passwordPolicy, ipRateLimitService,
+                auditLogService, securityEventService, new SensitiveActionPolicy(false, "", true));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> profileService.changePassword("owner",
+                new com.flarefitness.backend.dto.profile.ChangePasswordRequest("current", "NewPassword1!", "NewPassword1!")))
+                .isInstanceOf(com.flarefitness.backend.exception.ActionConfirmationRequiredException.class);
+        verify(userRepository, never()).save(any());
+        verify(passwordEncoder, never()).encode(any());
+        profileService.applyConfirmedPassword(user, "new-hash");
+        org.assertj.core.api.Assertions.assertThat(user.getPassword()).isEqualTo("new-hash");
+        org.assertj.core.api.Assertions.assertThat(user.getAuthVersion()).isEqualTo(5L);
+        verify(userRepository).save(user);
+        verify(redisTokenStore).revokeAll("owner");
+    }
+
 }

@@ -172,7 +172,7 @@ public class ProfileService {
     }
 
     void applyConfirmedPassword(User user, String encodedPassword) {
-        if (!sensitiveActionPolicy.requiresConfirmation(user) || encodedPassword == null || encodedPassword.isBlank()) {
+        if (!sensitiveActionPolicy.requiresPasswordChangeConfirmation(user) || encodedPassword == null || encodedPassword.isBlank()) {
             throw new com.flarefitness.backend.exception.ConflictException("Yeu cau doi mat khau khong con hieu luc.");
         }
         savePasswordAndRevoke(user, encodedPassword);
@@ -195,7 +195,7 @@ public class ProfileService {
     public void changePassword(String username, ChangePasswordRequest request) {
         User user = loadUserForMutation(username);
         recordSensitiveAttempt("PASSWORD_CHANGE", user.getId());
-        if (sensitiveActionPolicy.requiresConfirmation(user)) {
+        if (sensitiveActionPolicy.requiresPasswordChangeConfirmation(user)) {
             throw new com.flarefitness.backend.exception.ActionConfirmationRequiredException();
         }
 

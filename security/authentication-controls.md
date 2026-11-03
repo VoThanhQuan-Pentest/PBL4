@@ -20,8 +20,9 @@ tương thích tắt OTP được công bố nhưng không nằm trong kết lu�
 của cấu hình ASVS.
 
 Khi `APP_LOGIN_OTP_ENABLED=true`, đổi email đăng nhập bắt buộc xác nhận email
-hiện tại, độc lập với allowlist thử nghiệm xác nhận thao tác. Chính sách đổi
-mật khẩu và phạm vi thử nghiệm ML vẫn dùng allowlist hiện có. Web hỏi
+hiện tại, độc lập với allowlist thử nghiệm xác nhận thao tác. Đổi mật khẩu cũng
+cần mật khẩu hiện tại và OTP email hiện tại; phạm vi thử nghiệm ML vẫn dùng
+allowlist hiện có. Web hỏi
 `GET /api/profile/action-confirmations/policy?operation=EMAIL_CHANGE` hoặc
 `PASSWORD_CHANGE`; bỏ tham số giữ phản hồi chính sách thử nghiệm cũ, cùng ba
 trường JSON `required`, `contact_available`, `policy_id`.
@@ -38,7 +39,10 @@ trả `409 ACTION_CONFIRMATION_REQUIRED` khi chính sách yêu cầu xác nhận
 cần dùng các endpoint chuẩn bị/thực hiện hiện có. Khi tắt MFA và không thuộc
 allowlist, đổi email trực tiếp vẫn cần mật khẩu hiện tại và OTP email đích.
 Quản trị viên đổi email của chính mình cũng phải dùng hồ sơ cá nhân; API quản
-lý người dùng từ chối tự đổi/xóa email để tránh bỏ qua bước xác thực lại.
+lý người dùng từ chối tự đổi/xóa email và tự đặt mật khẩu để tránh bỏ qua bước
+xác thực lại. Mật khẩu trống hoặc bỏ qua trong yêu cầu quản lý giữ mật khẩu cũ;
+đặt lại mật khẩu cho tài khoản khác vẫn theo quyền quản trị hiện hữu. Challenge
+đổi mật khẩu v1 đã kiểm tra mật khẩu hiện tại nên vẫn giữ policy ID và TTL cũ.
 
 Mọi route `/internal/v1/*` của UEBA worker có dependency `require_token`;
 `GET /health` công khai để kiểm tra trạng thái. Các overlay local/AWS đặt worker

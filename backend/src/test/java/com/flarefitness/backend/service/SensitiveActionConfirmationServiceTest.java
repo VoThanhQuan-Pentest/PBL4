@@ -166,12 +166,12 @@ class SensitiveActionConfirmationServiceTest {
         verify(profiles, never()).applyConfirmedEmailChange(any(), any());
     }
 
-    @Test void mfaOnlyPolicyExposesEmailGuardWithoutEnablingPasswordTrial() {
+    @Test void mfaOnlyPolicyExposesBothFactorGuardsWithoutEnablingTrial() {
         when(users.findByUsernameIgnoreCase("owner")).thenReturn(Optional.of(user));
         service = new SensitiveActionConfirmationService(users, actions, otp, profiles,
                 new SensitiveActionPolicy(false, "", true), limits, audit, manager, clock);
         assertThat(service.status("owner").required()).isFalse();
-        assertThat(service.status("owner", ActionConfirmationDtos.Operation.PASSWORD_CHANGE).required()).isFalse();
+        assertThat(service.status("owner", ActionConfirmationDtos.Operation.PASSWORD_CHANGE).required()).isTrue();
         var email = service.status("owner", ActionConfirmationDtos.Operation.EMAIL_CHANGE);
         assertThat(email.required()).isTrue();
         assertThat(email.policyId()).isEqualTo(SensitiveActionPolicy.EMAIL_CHANGE_ID);
@@ -191,4 +191,19 @@ class SensitiveActionConfirmationServiceTest {
                 .isEqualTo("COMMITTED");
         verifyNoInteractions(postlogin);
     }
+    @Test void mfaOnlyPasswordConfirmationPreservesV1ProofAndNeverConsultsExperimentalPostlogin() {
+        var postlogin = mock(com.flarefitness.backend.service.siem.PostloginDecisionService.class);
+        service = new SensitiveActionConfirmationService(users, actions, otp, profiles,
+                new SensitiveActionPolicy(false, "", true), limits, audit, manager, postlogin);
+        when(profiles.prepareConfirmedPassword(eq(user), any())).thenReturn("encoded-only");
+        var challenge = service.prepare(actor(session), password(), "127.0.0.1");
+        var saved = ArgumentCaptor.forClass(SensitiveActionConfirmation.class);
+        verify(actions).saveAndFlush(saved.capture());
+        assertThat(saved.getValue().getPolicyId()).isEqualTo(SensitiveActionPolicy.ID);
+        when(actions.findForUpdate(challenge.id())).thenReturn(Optional.of(saved.getValue()));
+        assertThat(service.execute(actor(session), challenge.id(), code()).loginRequired()).isTrue();
+        verify(profiles).applyConfirmedPassword(user, "encoded-only");
+        verifyNoInteractions(postlogin);
+    }
+
 }

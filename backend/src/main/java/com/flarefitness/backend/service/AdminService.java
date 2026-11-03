@@ -163,6 +163,9 @@ public class AdminService {
         }
 
         String rawPassword = request.password() == null || request.password().isEmpty() ? null : request.password();
+        if (user.getId().equals(currentAdminId) && rawPassword != null) {
+            throw new BadRequestException("Hay doi mat khau tai khoan dang dang nhap trong ho so ca nhan de xac minh lai.");
+        }
         if (rawPassword != null) passwordPolicy.validateNewPassword(rawPassword);
         user.setUsername(username);
         user.setRole(role);

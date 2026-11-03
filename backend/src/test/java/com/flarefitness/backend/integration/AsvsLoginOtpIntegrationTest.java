@@ -89,7 +89,7 @@ class AsvsLoginOtpIntegrationTest extends ContainerizedIntegrationTest {
         assertThat(mapper.readTree(emailPolicy.getResponse().getContentAsString()).path("required").asBoolean()).isTrue();
         var passwordPolicy = mvc.perform(get("/api/profile/action-confirmations/policy").param("operation", "PASSWORD_CHANGE")
                 .cookie(authenticated)).andExpect(status().isOk()).andReturn();
-        assertThat(mapper.readTree(passwordPolicy.getResponse().getContentAsString()).path("required").asBoolean()).isFalse();
+        assertThat(mapper.readTree(passwordPolicy.getResponse().getContentAsString()).path("required").asBoolean()).isTrue();
         String target = user.getId() + "-destination@example.test";
         var profile = Map.of("ho_ten", "Reauthenticated owner", "email", target, "sdt", "", "current_password", PASSWORD);
         profileMutation(authenticated, "PUT", "/api/profile", profile).andExpect(status().isConflict());
@@ -134,6 +134,47 @@ class AsvsLoginOtpIntegrationTest extends ContainerizedIntegrationTest {
         assertThat(mapper.readTree(committed.getResponse().getContentAsString()).path("profile").path("email").asText()).isEqualTo(target);
         profileMutation(session, "POST", execute, Map.of("confirmation_code", currentFactor)).andExpect(status().isOk());
         assertThat(users.findById(user.getId()).orElseThrow().getEmail()).isEqualTo(target);
+    }
+
+
+    @Test void mfaPasswordChangeRequiresFreshPasswordAndCurrentMailboxBeforeRevokingSessions() throws Exception {
+        User user = fixture(); Challenge login = begin(user);
+        var session = verify(login, codes.get(user.getEmail()), IP, AGENT).getResponse().getCookie("access_token");
+        String originalHash = user.getPassword();
+        long originalEpoch = user.getAuthVersion() == null ? 0L : user.getAuthVersion();
+        String replacement = "Synthetic!ReplacementPassphrase2";
+        var password = Map.of("current_password", PASSWORD, "new_password", replacement, "confirm_password", replacement);
+        profileMutation(session, "PUT", "/api/profile/password", password).andExpect(status().isConflict());
+        codes.clear();
+        for (String supplied : java.util.List.of("", "incorrect-password")) {
+            profileMutation(session, "POST", "/api/profile/action-confirmations", Map.of("operation", "PASSWORD_CHANGE",
+                    "password", Map.of("current_password", supplied, "new_password", replacement, "confirm_password", replacement)))
+                    .andExpect(status().isBadRequest());
+        }
+        assertThat(codes).isEmpty();
+        assertThat(users.findById(user.getId()).orElseThrow().getPassword().equals(originalHash)).isTrue();
+        var prepared = profileMutation(session, "POST", "/api/profile/action-confirmations",
+                Map.of("operation", "PASSWORD_CHANGE", "password", password)).andExpect(status().isOk()).andReturn();
+        var challenge = mapper.readTree(prepared.getResponse().getContentAsString());
+        assertThat(challenge.path("policy_id").asText()).isEqualTo(com.flarefitness.backend.service.SensitiveActionPolicy.ID);
+        String currentFactor = codes.get(user.getEmail()); assertThat(currentFactor).isNotBlank();
+        String execute = "/api/profile/action-confirmations/" + challenge.path("id").asText() + "/execute";
+        String wrong = "000000".equals(currentFactor) ? "111111" : "000000";
+        profileMutation(session, "POST", execute, Map.of("confirmation_code", wrong)).andExpect(status().isBadRequest());
+        var unchanged = users.findById(user.getId()).orElseThrow();
+        assertThat(unchanged.getPassword().equals(originalHash)).isTrue();
+        assertThat(unchanged.getAuthVersion()).isEqualTo(originalEpoch);
+        mvc.perform(get("/api/auth/me").cookie(session)).andExpect(status().isOk());
+        var committed = profileMutation(session, "POST", execute, Map.of("confirmation_code", currentFactor))
+                .andExpect(status().isOk()).andReturn();
+        var result = mapper.readTree(committed.getResponse().getContentAsString());
+        assertThat(result.path("state").asText()).isEqualTo("COMMITTED");
+        assertThat(result.path("login_required").asBoolean()).isTrue();
+        var updated = users.findById(user.getId()).orElseThrow();
+        assertThat(passwords.matches(replacement, updated.getPassword())).isTrue();
+        assertThat(passwords.matches(PASSWORD, updated.getPassword())).isFalse();
+        assertThat(updated.getAuthVersion()).isEqualTo(originalEpoch + 1L);
+        mvc.perform(get("/api/auth/me").cookie(session)).andExpect(status().isUnauthorized());
     }
 
     private org.springframework.test.web.servlet.ResultActions profileMutation(jakarta.servlet.http.Cookie session,

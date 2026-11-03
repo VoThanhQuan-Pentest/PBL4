@@ -48,6 +48,11 @@ public class SensitiveActionPolicy {
         return user != null && (loginOtpEnabled || requiresConfirmation(user));
     }
 
+    /** Replacing a login password requires the enrolled second factor outside the trial too. */
+    public boolean requiresPasswordChangeConfirmation(User user) {
+        return user != null && (loginOtpEnabled || requiresConfirmation(user));
+    }
+
     public static String policyId(String operation) {
         return "EMAIL_CHANGE".equals(operation) ? EMAIL_CHANGE_ID : ID;
     }

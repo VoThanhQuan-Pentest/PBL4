@@ -119,4 +119,52 @@ class AdminServiceTest {
         org.mockito.Mockito.verify(userRepository, org.mockito.Mockito.never()).save(org.mockito.ArgumentMatchers.any());
         org.mockito.Mockito.verify(redisTokenStore, org.mockito.Mockito.never()).revokeAll(org.mockito.ArgumentMatchers.any());
     }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"NewPassword1!", " "})
+    void adminCannotBypassOwnPasswordReauthenticationThroughUserManagement(String password) {
+        User self = user(); self.setRole("Quan tri vien"); self.setAuthVersion(7L);
+        when(userRepository.findActiveByIdForUpdate(self.getId())).thenReturn(java.util.Optional.of(self));
+        var principal = new com.flarefitness.backend.security.CurrentUserPrincipal(self);
+        var actor = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities());
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> adminService.updateUser(self.getId(),
+                new com.flarefitness.backend.dto.admin.AdminUserRequest("Changed name", self.getUsername(), self.getEmail(),
+                        "", self.getRole(), self.getStatus(), password), actor))
+                .isInstanceOf(com.flarefitness.backend.exception.BadRequestException.class);
+        assertThat(self.getPassword()).isEqualTo("encoded");
+        assertThat(self.getHoTen()).isEqualTo("Page Test");
+        assertThat(self.getAuthVersion()).isEqualTo(7L);
+        org.mockito.Mockito.verify(userRepository, org.mockito.Mockito.never()).save(org.mockito.ArgumentMatchers.any());
+        org.mockito.Mockito.verifyNoInteractions(passwordEncoder, redisTokenStore);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.NullAndEmptySource
+    void adminCanEditOwnMetadataWithoutReplacingThePassword(String password) {
+        User self = user(); self.setRole("Quan tri vien"); self.setAuthVersion(7L);
+        when(userRepository.findActiveByIdForUpdate(self.getId())).thenReturn(java.util.Optional.of(self));
+        var principal = new com.flarefitness.backend.security.CurrentUserPrincipal(self);
+        var actor = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities());
+        adminService.updateUser(self.getId(), new com.flarefitness.backend.dto.admin.AdminUserRequest(
+                "Changed name", self.getUsername(), self.getEmail(), "", self.getRole(), self.getStatus(), password), actor);
+        assertThat(self.getPassword()).isEqualTo("encoded");
+        assertThat(self.getHoTen()).isEqualTo("Changed name");
+        assertThat(self.getAuthVersion()).isEqualTo(7L);
+        verify(userRepository).save(self);
+        org.mockito.Mockito.verifyNoInteractions(passwordEncoder, redisTokenStore);
+    }
+
+    @Test void administrativePasswordResetForAnotherAccountRemainsAvailableAndRevokesSessions() {
+        User target = user(); target.setAuthVersion(7L);
+        when(userRepository.findActiveByIdForUpdate(target.getId())).thenReturn(java.util.Optional.of(target));
+        User admin = user(); admin.setId("different-admin"); admin.setRole("ADMIN");
+        var principal = new com.flarefitness.backend.security.CurrentUserPrincipal(admin);
+        var actor = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities());
+        when(passwordEncoder.encode("NewPassword1!")).thenReturn("replacement-hash");
+        adminService.updateUser(target.getId(), new com.flarefitness.backend.dto.admin.AdminUserRequest(
+                target.getHoTen(), target.getUsername(), target.getEmail(), "", target.getRole(), target.getStatus(), "NewPassword1!"), actor);
+        assertThat(target.getPassword()).isEqualTo("replacement-hash");
+        assertThat(target.getAuthVersion()).isEqualTo(8L);
+        verify(redisTokenStore, org.mockito.Mockito.atLeastOnce()).revokeAll(target.getUsername());
+    }
+
 }
