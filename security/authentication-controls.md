@@ -55,6 +55,13 @@ với `text/html; charset=utf-8`; không đưa dữ liệu yêu cầu vào HTML.
 SVG do Nginx phục vụ cũng khai báo UTF-8. Điều này không chứng nhận toàn bộ
 phản hồi của backend, gateway và các tích hợp khác.
 
+Backend chỉ giữ `X-Request-ID` hợp lệ khi TCP peer trực tiếp thuộc CIDR proxy
+đã cấu hình; caller khác nhận UUID mới dù gửi thêm header IP giả. Header phản
+hồi, MDC và `traceId` trong lỗi API dùng cùng mã đã được quyết định ở filter.
+UUID yêu cầu của sự kiện xác thực vẫn được server tạo độc lập cho mọi request.
+Client trực tiếp backend cần dùng mã phản hồi để tra cứu lỗi; không dựa vào mã
+do chính client gửi để xác định yêu cầu đã được hệ thống tin cậy.
+
 Mọi route `/internal/v1/*` của UEBA worker có dependency `require_token`;
 `GET /health` công khai để kiểm tra trạng thái. Các overlay local/AWS đặt worker
 trên mạng `ueba-internal`, không publish cổng host, và mount token ngoài Git chỉ

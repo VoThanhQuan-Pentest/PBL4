@@ -21,6 +21,11 @@ public class IpAddressResolver {
                 .toList();
     }
 
+    /** Trust only the immediate socket peer, never an address from a forwarded header. */
+    public boolean isTrustedPeer(HttpServletRequest request) {
+        return isTrustedProxy(normalizeIp(request.getRemoteAddr()));
+    }
+
     public String resolve(HttpServletRequest request) {
         String remoteAddress = normalizeIp(request.getRemoteAddr());
         if (!isTrustedProxy(remoteAddress)) {

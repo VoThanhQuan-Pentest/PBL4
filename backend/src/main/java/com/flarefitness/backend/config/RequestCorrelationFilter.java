@@ -1,5 +1,6 @@
 package com.flarefitness.backend.config;
 
+import com.flarefitness.backend.security.IpAddressResolver;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -21,6 +22,12 @@ public class RequestCorrelationFilter extends OncePerRequestFilter {
     private static final String HEADER = "X-Request-ID";
     private static final Pattern SAFE_REQUEST_ID = Pattern.compile("[A-Za-z0-9_-]{8,64}");
 
+    private final IpAddressResolver ipAddressResolver;
+
+    public RequestCorrelationFilter(IpAddressResolver ipAddressResolver) {
+        this.ipAddressResolver = ipAddressResolver;
+    }
+
     @Override
     protected void doFilterInternal(
             HttpServletRequest request,
@@ -29,7 +36,8 @@ public class RequestCorrelationFilter extends OncePerRequestFilter {
     ) throws ServletException, IOException {
         request.setAttribute(com.flarefitness.backend.service.siem.SiemAuthTelemetry.REQUEST_ID,UUID.randomUUID().toString());
         String requested = request.getHeader(HEADER);
-        String traceId = requested != null && SAFE_REQUEST_ID.matcher(requested).matches()
+        String traceId = requested != null && ipAddressResolver.isTrustedPeer(request)
+                && SAFE_REQUEST_ID.matcher(requested).matches()
                 ? requested
                 : UUID.randomUUID().toString();
         MDC.put("traceId", traceId);
