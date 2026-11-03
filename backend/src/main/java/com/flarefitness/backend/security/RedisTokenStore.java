@@ -136,6 +136,10 @@ public class RedisTokenStore {
         String userKey = userKey(username);
         Set<String> tokens = redisTemplate.opsForSet().members(userKey);
         if (tokens != null && !tokens.isEmpty()) {
+            // Remove only this snapshot, before deleting physical records. A
+            // concurrent save of either a new token or a delayed legacy
+            // migration must remain indexed if it survives physical deletion.
+            redisTemplate.opsForSet().remove(userKey, tokens.toArray());
             // Current set members are SHA-256 fingerprints.  A legacy set can
             // still contain raw JWTs, however, so delete both representations
             // while revoking every device.  This is the only compatibility
@@ -151,10 +155,6 @@ public class RedisTokenStore {
                 tokens.forEach(member -> includingIdle.add(idleKey(isFingerprint(member) ? member : fingerprint(member))));
                 redisTemplate.delete(includingIdle);
             } else redisTemplate.delete(tokenKeys);
-            // Remove only this snapshot: a concurrent login may have registered
-            // another session since SMEMBERS. Deleting the entire index would
-            // leave that live session unreachable by future bulk revocations.
-            redisTemplate.opsForSet().remove(userKey, tokens.toArray());
         }
     }
 

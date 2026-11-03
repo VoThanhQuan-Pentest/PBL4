@@ -123,6 +123,26 @@ class RedisSessionIndexIntegrationTest extends ContainerizedIntegrationTest {
         assertConcurrentRegistrationRemainsRevocable(0, false, true);
     }
 
+    @Test void delayedMigrationAfterPhysicalDeletionRemainsRevocable() {
+        sessions.save("migrating-session", "Alice", 600);
+        var interceptedRedis = spy(redis);
+        doAnswer(invocation -> {
+            Long deleted = redis.delete(invocation.<java.util.Collection<String>>getArgument(0));
+            // A legacy lookup can have captured owner/TTL before revocation,
+            // then publish this same fingerprint after physical deletion.
+            sessions.save("migrating-session", "Alice", 600);
+            return deleted;
+        }).when(interceptedRedis).delete(org.mockito.ArgumentMatchers.<String>anyCollection());
+
+        new RedisTokenStore(interceptedRedis, tokenPrefix, userPrefix).revokeAll("Alice");
+
+        assertThat(sessions.contains("migrating-session")).isTrue();
+        assertThat(redis.opsForSet().members(userPrefix + "alice"))
+                .containsExactly(TokenFingerprint.sha256("migrating-session"));
+        sessions.revokeAll("Alice");
+        assertThat(sessions.contains("migrating-session")).isFalse();
+    }
+
     private void assertConcurrentRegistrationRemainsRevocable(long idleSeconds, boolean empty, boolean legacy) {
         sessions = new RedisTokenStore(redis, tokenPrefix, userPrefix, idleSeconds);
         if (!empty) {
