@@ -3,6 +3,32 @@
 Phạm vi: hành vi hiện có của backend/gateway và cấu hình ASVS riêng. Không thay
 đổi cấu hình local đang chạy hoặc chứng nhận model, môi trường production.
 
+## Đường xác thực và ranh giới quyền
+
+| Đường vào ứng dụng | Bằng chứng và kiểm soát |
+| --- | --- |
+| Web/API qua Nginx hoặc trực tiếp backend | Cấu hình ASVS yêu cầu mật khẩu rồi OTP email qua `/api/auth/login` và `/api/auth/login/otp`; CSRF vẫn bắt buộc. Cookie và Bearer JWT dùng cùng bộ kiểm tra chữ ký, Redis allowlist, ID tài khoản, `auth_version`, trạng thái và quyền. |
+| JavaFX | Gọi cùng API mật khẩu/OTP, giữ cookie và CSRF; không có bộ kiểm tra mật khẩu riêng hoặc bước xác thực local thay thế. |
+| Gateway phục hồi `8089` | Publish loopback trong overlay; whitelist auth/SIEM, giữ lỗi xác thực và kiểm tra quyền SOC của backend. Không cấp JWT tại gateway. |
+| Gateway ↔ backend prevention | Ba route policy/ack/test và token máy `X-Flare-Service-Token` được mô tả ở [README](../README.md#các-kênh-xác-thực-của-gateway-và-backend). Route test dùng chung listener công khai; không dựa vào tiền tố `/internal/` để bảo vệ. |
+| Backend → UEBA worker | Backend đọc `SIEM_UEBA_SERVICE_TOKEN_FILE`, gửi `X-UEBA-Token` tới worker; worker đọc `UEBA_SERVICE_TOKEN_FILE`, yêu cầu token ít nhất 32 ký tự và so sánh bằng `secrets.compare_digest`. Thiếu/sai token trả `403`, không đọc được tệp trả `503`. Token máy không cấp phiên người dùng. |
+| CLI bootstrap AWS | Công cụ SSH riêng `AwsLabBootstrap`, yêu cầu `FLARE_ENVIRONMENT=aws-lab` và quyền DB để tạo admin khi chưa có admin hoạt động. Không phải API HTTP, không được gọi bởi entrypoint backend mặc định. Vòng đời mật khẩu khởi tạo chưa được tài liệu này chứng nhận. |
+
+Đăng ký vẫn cần mật khẩu tự chọn và OTP email; khôi phục chỉ cấp grant đặt lại
+mật khẩu gắn tài khoản sau OTP, không tự cấp phiên đăng nhập. Chế độ local
+tương thích tắt OTP được công bố nhưng không nằm trong kết luận nhiều yếu tố
+của cấu hình ASVS.
+
+Mọi route `/internal/v1/*` của UEBA worker có dependency `require_token`;
+`GET /health` công khai để kiểm tra trạng thái. Các overlay local/AWS đặt worker
+trên mạng `ueba-internal`, không publish cổng host, và mount token ngoài Git chỉ
+đọc. Khi overlay post-login đặt `UEBA_POSTLOGIN_SERVING_ONLY=true`, middleware
+chỉ cho `/health`, `/internal/v1/postlogin/score` và
+`/internal/v1/postlogin/shadow-score`; các route train/evaluate/activate/adopt/job
+khác trả `404` trước endpoint. Đây là mô tả quyền hiện có, không phải yêu cầu
+chạy các API đó. Bảo vệ đường truyền, cấp/xoay/thu hồi token và xác minh cấu hình
+đang triển khai phải đánh giá riêng; không suy ra từ quyền truy cập model volume.
+
 ## Cấu hình và tác dụng
 
 Backend đọc các biến sau qua [application.properties](../backend/src/main/resources/application.properties).
