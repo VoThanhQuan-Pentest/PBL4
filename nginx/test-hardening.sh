@@ -25,7 +25,9 @@ if docker run --rm -e 'NGINX_TRUSTED_PROXY_CIDR=0.0.0.0/0' "$IMAGE" nginx -t >/d
   exit 1
 fi
 docker network create "$NETWORK" >/dev/null
-docker run -d --rm --name "$MOCK_APP" --network "$NETWORK" --network-alias app nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10 >/dev/null
+docker run -d --rm --name "$MOCK_APP" --network "$NETWORK" --network-alias app \
+  -v "${ROOT_DIR}/nginx/test-upstream.conf:/etc/nginx/conf.d/default.conf:ro" \
+  nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10 >/dev/null
 docker run -d --rm --name "$WEB" --network "$NETWORK" -p 127.0.0.1::80 "$IMAGE" >/dev/null
 TRUSTED_PROXY_CIDR=$(docker network inspect "$NETWORK" --format '{{(index .IPAM.Config 0).Subnet}}')
 docker run -d --rm --name "$TRUSTED_WEB" --network "$NETWORK" --network-alias trusted-web \
@@ -120,9 +122,10 @@ done
 trusted_proxy_api_response=$(docker exec "$MOCK_APP" wget -S -O /dev/null \
   --header='Host: flarefitness.site' --header='X-Forwarded-Proto: https' \
   http://trusted-web/api/health 2>&1 || true)
-# The mock app has no /api/health and returns404; reaching it proves the trusted
-# HTTPS API flow was preserved instead of receiving the new cleartext400.
-if ! printf '%s\n' "$trusted_proxy_api_response" | grep -q 'HTTP/1.1 404'; then
+# The fixture listens on the real proxy target port8080. Check its marker as
+# well as200 so a local SPA response cannot impersonate the upstream control.
+if ! printf '%s\n' "$trusted_proxy_api_response" | grep -q 'HTTP/1.1 200' \
+  || ! printf '%s\n' "$trusted_proxy_api_response" | grep -qi 'X-ASVS-Test-Upstream: reached'; then
   printf '%s\n' 'Trusted HTTPS API request did not reach the mock upstream' >&2
   exit 1
 fi
@@ -131,6 +134,11 @@ assert_security_headers "$root_response" /
 assert_security_headers "$index_response" /index.html
 assert_security_headers "$asset_response" /assets/svg/twitter.svg
 assert_security_headers "$api_response" /api/health
+if ! printf '%s\n' "$api_response" | grep -q '^HTTP/.* 200' \
+  || ! printf '%s\n' "$api_response" | grep -qi '^X-ASVS-Test-Upstream: reached'; then
+  printf '%s\n' 'Local HTTP API request did not reach the mock upstream' >&2
+  exit 1
+fi
 assert_security_headers "$spoof_response" HTTPS-redirect
 
 # Nginx deliberately clears charset on native 301/302 responses (including
