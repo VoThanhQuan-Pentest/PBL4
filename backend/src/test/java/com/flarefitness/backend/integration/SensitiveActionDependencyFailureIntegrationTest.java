@@ -42,7 +42,7 @@ class SensitiveActionDependencyFailureIntegrationTest extends SensitiveActionCon
             login(owner,user);
             String target="lost-response-destination@example.test";
             String id=body(send(owner,"POST","/api/profile/action-confirmations",Map.of("operation","EMAIL_CHANGE",
-                    "profile",Map.of("ho_ten","Lab owner","email",target,"sdt","")),200)).path("id").asText();
+                    "profile",Map.of("ho_ten","Lab owner","email",target,"sdt","","current_password",CURRENT)),200)).path("id").asText();
             String code=delivered.get(user.getEmail());
             send(owner,"POST","/api/profile/email/otp",Map.of("email",target),200);
             var payload=Map.of("confirmation_code",code,"destination_otp_code",delivered.get(target));
@@ -96,7 +96,7 @@ class SensitiveActionDependencyFailureIntegrationTest extends SensitiveActionCon
         try(var owner=new Client()) {
             login(owner,user);
             String target="bound-destination-a@example.test", other="bound-destination-b@example.test";
-            var profile=Map.of("ho_ten","Lab owner","email",target,"sdt","");
+            var profile=Map.of("ho_ten","Lab owner","email",target,"sdt","","current_password",CURRENT);
             String id=body(send(owner,"POST","/api/profile/action-confirmations",Map.of("operation","EMAIL_CHANGE","profile",profile),200)).path("id").asText();
             String currentCode=delivered.get(user.getEmail());
             send(owner,"POST","/api/profile/email/otp",Map.of("email",other),200);
