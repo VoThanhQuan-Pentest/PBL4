@@ -8687,12 +8687,12 @@ document.addEventListener('DOMContentLoaded', () => {
         if (readStoredValue(VOUCHER_ASSIGNMENTS_VERSION_KEY, '') !== VOUCHER_ASSIGNMENTS_VERSION) {
             removeStorage(VOUCHER_ASSIGNMENTS_KEY);
             writeStoredValue(VOUCHER_ASSIGNMENTS_VERSION_KEY, VOUCHER_ASSIGNMENTS_VERSION);
-            return {};
+            return Object.create(null);
         }
 
         const stored = readStorage(VOUCHER_ASSIGNMENTS_KEY, null);
         if (!stored || typeof stored !== 'object' || Array.isArray(stored)) {
-            return {};
+            return Object.create(null);
         }
 
         return Object.entries(stored).reduce((store, [accountKey, entry]) => {
@@ -8701,7 +8701,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 store[normalized.accountKey] = normalized;
             }
             return store;
-        }, {});
+        }, Object.create(null));
     }
 
     function saveVoucherAssignmentStore(store = {}) {
@@ -8711,7 +8711,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 result[normalized.accountKey] = normalized;
             }
             return result;
-        }, {});
+        }, Object.create(null));
         writeStorage(VOUCHER_ASSIGNMENTS_KEY, normalizedStore);
         writeStoredValue(VOUCHER_ASSIGNMENTS_VERSION_KEY, VOUCHER_ASSIGNMENTS_VERSION);
     }
@@ -8737,7 +8737,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 grants: nextGrants
             };
             return result;
-        }, {});
+        }, Object.create(null));
 
         if (changed) {
             saveVoucherAssignmentStore(nextStore);
