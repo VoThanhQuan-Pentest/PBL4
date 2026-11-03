@@ -82,6 +82,30 @@ index_response=$(headers -H 'Host: localhost' "${BASE_URL}/index.html")
 asset_response=$(headers -H 'Host: localhost' "${BASE_URL}/assets/svg/twitter.svg")
 api_response=$(headers -H 'Host: localhost' "${BASE_URL}/api/health")
 spoof_response=$(headers -H 'Host: flarefitness.site' -H 'X-Forwarded-Proto: https' "${BASE_URL}/")
+# Public cleartext machine endpoints fail explicitly, even for normalized URI
+# aliases and asset-looking paths; no Location may hide a client's HTTP error.
+for public_host in flarefitness.site www.flarefitness.site; do
+  for method in GET POST OPTIONS; do
+    for path in /api /api/auth/login /%61pi/health //api/health /api%2Fhealth /api/a/../health /API/health /api/file.js /internal/v1/prevention/policy /actuator/health; do
+      cleartext_response=$(headers --path-as-is -X "$method" -H "Host: $public_host" \
+        -H 'X-Forwarded-Proto: https' "${BASE_URL}${path}")
+      if ! printf '%s\n' "$cleartext_response" | grep -q '^HTTP/.* 400'; then
+        printf 'Cleartext machine request was not rejected: %s %s %s\n' "$public_host" "$method" "$path" >&2
+        exit 1
+      fi
+      if printf '%s\n' "$cleartext_response" | grep -qi '^Location:'; then
+        printf 'Cleartext machine response redirected: %s\n' "$path" >&2
+        exit 1
+      fi
+    done
+  done
+  page_response=$(headers -H "Host: $public_host" "${BASE_URL}/apiary")
+  if ! printf '%s\n' "$page_response" | grep -q '^HTTP/.* 301'; then
+    printf '%s\n' 'API namespace match swallowed a page route' >&2
+    exit 1
+  fi
+done
+
 trusted_proxy_response=''
 attempt=1
 while [ "$attempt" -le 10 ]; do
@@ -92,6 +116,16 @@ while [ "$attempt" -le 10 ]; do
   attempt=$((attempt + 1))
   sleep 1
 done
+
+trusted_proxy_api_response=$(docker exec "$MOCK_APP" wget -S -O /dev/null \
+  --header='Host: flarefitness.site' --header='X-Forwarded-Proto: https' \
+  http://trusted-web/api/health 2>&1 || true)
+# The mock app has no /api/health and returns404; reaching it proves the trusted
+# HTTPS API flow was preserved instead of receiving the new cleartext400.
+if ! printf '%s\n' "$trusted_proxy_api_response" | grep -q 'HTTP/1.1 404'; then
+  printf '%s\n' 'Trusted HTTPS API request did not reach the mock upstream' >&2
+  exit 1
+fi
 
 assert_security_headers "$root_response" /
 assert_security_headers "$index_response" /index.html

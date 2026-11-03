@@ -44,6 +44,13 @@ xác thực lại. Mật khẩu trống hoặc bỏ qua trong yêu cầu quản 
 đặt lại mật khẩu cho tài khoản khác vẫn theo quyền quản trị hiện hữu. Challenge
 đổi mật khẩu v1 đã kiểm tra mật khẩu hiện tại nên vẫn giữ policy ID và TTL cũ.
 
+Với hai hostname công khai `flarefitness.site` và `www.flarefitness.site`,
+yêu cầu HTTP tới namespace `/api`, `/internal`, `/actuator` trả 400, không có
+`Location`; client phải gọi HTTPS ngay từ đầu. Quy tắc dùng URI đã chuẩn hóa,
+chạy trước chuyển hướng trang và chọn location. Trang dành cho người dùng vẫn
+chuyển hướng 301. HTTP local và HTTPS đã được proxy tin cậy xác nhận giữ luồng
+hiện hữu. Việc từ chối không thể thu hồi dữ liệu mà client đã gửi qua HTTP.
+
 Mọi route `/internal/v1/*` của UEBA worker có dependency `require_token`;
 `GET /health` công khai để kiểm tra trạng thái. Các overlay local/AWS đặt worker
 trên mạng `ueba-internal`, không publish cổng host, và mount token ngoài Git chỉ
