@@ -108,6 +108,40 @@ for public_host in flarefitness.site www.flarefitness.site; do
   fi
 done
 
+# Preserve301 semantics and exactly one typed header/Location for non-GET
+# callers too. A fixed body must never reflect the requested path/query.
+for public_host in flarefitness.site www.flarefitness.site; do
+  for method in GET POST OPTIONS; do
+    redirect_path='/?redirect=%22%3Cscript%3E'
+    typed_redirect=$(headers -X "$method" -H "Host: $public_host" "${BASE_URL}${redirect_path}")
+    if ! printf '%s\n' "$typed_redirect" | grep -q '^HTTP/.* 301' \
+      || [ "$(printf '%s\n' "$typed_redirect" | grep -ci '^Content-Type:')" -ne 1 ] \
+      || ! printf '%s\n' "$typed_redirect" | grep -qi '^Content-Type: text/html; charset=utf-8' \
+      || [ "$(printf '%s\n' "$typed_redirect" | grep -ci '^Location:')" -ne 1 ] \
+      || ! printf '%s\n' "$typed_redirect" | grep -Fqi "Location: https://${public_host}${redirect_path}"; then
+      printf '%s\n' 'Redirect status, type or Location changed' >&2
+      exit 1
+    fi
+    redirect_body=$(curl --connect-timeout 2 --max-time 5 --silent --show-error \
+      -X "$method" -H "Host: $public_host" "${BASE_URL}${redirect_path}")
+    if [ "$redirect_body" != '<!doctype html><title>Moved Permanently</title>' ]; then
+      printf '%s\n' 'Redirect body is not the fixed safe HTML' >&2
+      exit 1
+    fi
+  done
+done
+
+css_asset_path=$(docker exec "$WEB" sh -c 'find /usr/share/nginx/html/assets -type f -name "*.css" | head -n 1')
+if [ -z "$css_asset_path" ]; then
+  printf '%s\n' 'Built CSS fixture is missing' >&2
+  exit 1
+fi
+css_response=$(headers -H 'Host: localhost' "${BASE_URL}${css_asset_path#/usr/share/nginx/html}")
+if ! printf '%s\n' "$css_response" | grep -qi '^Content-Type: text/css; charset=utf-8'; then
+  printf '%s\n' 'Built CSS response must declare UTF-8' >&2
+  exit 1
+fi
+
 trusted_proxy_response=''
 attempt=1
 while [ "$attempt" -le 10 ]; do
@@ -141,16 +175,17 @@ if ! printf '%s\n' "$api_response" | grep -q '^HTTP/.* 200' \
 fi
 assert_security_headers "$spoof_response" HTTPS-redirect
 
-# Nginx deliberately clears charset on native 301/302 responses (including
-# when charset utf-8 is configured). Assert UTF-8 on the application HTML;
-# the redirect status, Location and security headers are checked separately.
-# This does not establish charset compliance for every generated response.
-for response in "$root_response" "$index_response"; do
+# The fixed redirect body preserves301/Location and explicitly declares UTF-8.
+for response in "$root_response" "$index_response" "$spoof_response"; do
   if ! printf '%s\n' "$response" | grep -qi '^Content-Type: text/html; charset=utf-8'; then
-    printf '%s\n' 'HTML response must declare its UTF-8 charset' >&2
+    printf '%s\n' 'HTML and redirect responses must declare their UTF-8 charset' >&2
     exit 1
   fi
 done
+if ! printf '%s\n' "$asset_response" | grep -qi '^Content-Type: image/svg+xml; charset=utf-8'; then
+  printf '%s\n' 'SVG response must declare UTF-8' >&2
+  exit 1
+fi
 
 if ! printf '%s\n' "$spoof_response" | grep -q '^HTTP/.* 301'; then
   printf 'An untrusted X-Forwarded-Proto header bypassed the HTTPS redirect\n' >&2

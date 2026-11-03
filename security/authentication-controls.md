@@ -50,6 +50,10 @@ yêu cầu HTTP tới namespace `/api`, `/internal`, `/actuator` trả 400, khô
 chạy trước chuyển hướng trang và chọn location. Trang dành cho người dùng vẫn
 chuyển hướng 301. HTTP local và HTTPS đã được proxy tin cậy xác nhận giữ luồng
 hiện hữu. Việc từ chối không thể thu hồi dữ liệu mà client đã gửi qua HTTP.
+Phản hồi chuyển hướng 301 giữ nguyên `Location` và dùng nội dung HTML cố định
+với `text/html; charset=utf-8`; không đưa dữ liệu yêu cầu vào HTML. CSS, XML và
+SVG do Nginx phục vụ cũng khai báo UTF-8. Điều này không chứng nhận toàn bộ
+phản hồi của backend, gateway và các tích hợp khác.
 
 Mọi route `/internal/v1/*` của UEBA worker có dependency `require_token`;
 `GET /health` công khai để kiểm tra trạng thái. Các overlay local/AWS đặt worker
