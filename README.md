@@ -106,6 +106,9 @@ không bảo đảm phát hiện mọi mật khẩu từng bị lộ. Dữ liệ
 RAM tăng khoảng 1,5–2 MiB; không có truy vấn mạng theo mật khẩu người dùng.
 Nguồn, digest và giấy phép được lưu trong `security/passwords/`.
 
+Các ngưỡng chống dò mật khẩu/OTP, cách cấu hình và giới hạn chống khóa tài khoản
+ác ý được mô tả tại [Kiểm soát xác thực](security/authentication-controls.md).
+
 Workflow CI có tùy chọn `asvs_validation`: kiểm tra API trên MySQL/Redis riêng,
 trình duyệt qua HTTPS có CA tin cậy, DAST giới hạn và pipeline ELK. Chỉ có runner
 GitHub được phép khởi tạo project này; báo cáo chi tiết được mã hóa bằng public
