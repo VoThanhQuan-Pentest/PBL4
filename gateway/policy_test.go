@@ -472,3 +472,117 @@ func TestUntilRevokedPolicySurvivesRestartAndExplicitRelease(t *testing.T) {
 		t.Fatal("corrupt policy accepted")
 	}
 }
+
+func TestTrustedTLSProxyPreservesClientBlocksEventsAndUpstreamIdentity(t *testing.T) {
+	t.Setenv("PREVENTION_TRUSTED_PROXY_CIDRS", "127.0.0.1/32")
+	t.Setenv("PREVENTION_REDIS_ADDR", "")
+	var events bytes.Buffer
+	var forwarded, realIP, trace string
+	var hits int
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		hits++
+		forwarded = request.Header.Get("X-Forwarded-For")
+		realIP = request.Header.Get("X-Real-IP")
+		trace = request.Header.Get("X-Request-ID")
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+	gateway, err := newServer(upstream.URL, "", "", &events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway.policy.Store(testPolicy(t, nil, []block{{
+		ID: "block-original-client-123", IP: "198.51.100.77", ExpiresAt: time.Now().Add(time.Hour),
+	}}))
+	proxy := httptest.NewServer(gateway)
+	defer proxy.Close()
+	send := func(client string) int {
+		request, _ := http.NewRequest(http.MethodGet, proxy.URL+"/api/health", nil)
+		request.Header.Set("X-Forwarded-For", client)
+		request.Header.Set("X-Real-IP", "8.8.8.8")
+		request.Header.Set("X-Request-ID", "caller-controlled")
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		return response.StatusCode
+	}
+	if status := send("198.51.100.77"); status != http.StatusForbidden || hits != 0 {
+		t.Fatalf("original client block lost: status=%d upstream=%d", status, hits)
+	}
+	var event securityEvent
+	if err := json.Unmarshal(bytes.TrimSpace(events.Bytes()), &event); err != nil {
+		t.Fatal(err)
+	}
+	if event.EventType != "IP_BLOCK" || event.IP != "198.51.100.77" {
+		t.Fatalf("incorrect blocked actor: %+v", event)
+	}
+	if status := send("203.0.113.9"); status != http.StatusOK || hits != 1 ||
+		forwarded != "203.0.113.9" || realIP != forwarded || len(trace) != 32 || trace == "caller-controlled" {
+		t.Fatalf("other actor changed: status=%d hits=%d forwarded=%s real=%s trace=%s", status, hits, forwarded, realIP, trace)
+	}
+}
+
+func TestTrustedTLSProxyRejectsAmbiguousHeadersBeforeUpstream(t *testing.T) {
+	t.Setenv("PREVENTION_TRUSTED_PROXY_CIDRS", "127.0.0.1/32")
+	t.Setenv("PREVENTION_REDIS_ADDR", "")
+	hits := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		hits++
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+	gateway, err := newServer(upstream.URL, "", "", io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway.policy.Store(testPolicy(t, nil, nil))
+	proxy := httptest.NewServer(gateway)
+	defer proxy.Close()
+	request, _ := http.NewRequest(http.MethodGet, proxy.URL+"/api/health", nil)
+	request.Header.Add("X-Forwarded-For", "198.51.100.77")
+	request.Header.Add("X-Forwarded-For", "203.0.113.9")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusBadRequest || hits != 0 {
+		t.Fatalf("ambiguous request status=%d upstream=%d", response.StatusCode, hits)
+	}
+}
+
+func TestProxyTrustDoesNotChangeTheDirectManagementRecoveryListener(t *testing.T) {
+	t.Setenv("PREVENTION_TRUSTED_PROXY_CIDRS", "127.0.0.1/32")
+	t.Setenv("PREVENTION_REDIS_ADDR", "")
+	var forwarded string
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		forwarded = request.Header.Get("X-Forwarded-For")
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+	gateway, err := newServer(upstream.URL, "", "", io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	management := httptest.NewServer(http.HandlerFunc(gateway.ServeManagementHTTP))
+	defer management.Close()
+	request, _ := http.NewRequest(http.MethodGet, management.URL+"/api/auth/csrf", nil)
+	request.Header.Set("X-Forwarded-For", "198.51.100.77")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || forwarded != "127.0.0.1" {
+		t.Fatalf("management source changed: status=%d forwarded=%s", response.StatusCode, forwarded)
+	}
+}
+
+func TestGatewayRejectsInvalidProxyTrustBeforeStarting(t *testing.T) {
+	t.Setenv("PREVENTION_TRUSTED_PROXY_CIDRS", "0.0.0.0/0")
+	if _, err := newServer("http://127.0.0.1:1", "", "", io.Discard); err == nil {
+		t.Fatal("accepted universal proxy trust")
+	}
+}

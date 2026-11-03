@@ -1,3 +1,4 @@
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -11,10 +12,10 @@ ROOT = Path(__file__).resolve().parents[2]
 
 @unittest.skipUnless(shutil.which('docker'), 'Docker Compose is required for static rendering only')
 class TopologyTest(unittest.TestCase):
-    def test_only_the_scanner_network_is_externally_isolated_and_browser_ports_remain_loopback(self):
+    def render(self, overrides=None):
         with tempfile.TemporaryDirectory() as temporary:
             env = {**os.environ, 'OBSERVABILITY_ROOT_DIR': str(ROOT), 'ASVS_TLS_DIR': temporary,
-                   'UEBA_OPERATOR_GID': str(os.getgid())}
+                   'UEBA_OPERATOR_GID': str(os.getgid()), **(overrides or {})}
             args = ['docker', 'compose', '--env-file', '.env.e2e.example', '--project-name',
                     'pbl4-observability-runtime-123-1', '--profile', 'observability']
             for file in ['docker-compose.yml', 'docker-compose.e2e.yml',
@@ -23,7 +24,10 @@ class TopologyTest(unittest.TestCase):
                 args += ['-f', file]
             output = subprocess.run(args+['config', '--format', 'json'], cwd=ROOT, env=env,
                                     capture_output=True, text=True, check=True)
-            config = json.loads(output.stdout)
+            return json.loads(output.stdout)
+
+    def test_only_the_scanner_network_is_externally_isolated_and_browser_ports_remain_loopback(self):
+        config = self.render()
         self.assertFalse(config['networks']['flare-internal'].get('internal', False))
         self.assertTrue(config['networks']['asvs-scanner']['internal'])
         scanner_peers = [name for name, service in config['services'].items()
@@ -44,3 +48,19 @@ class TopologyTest(unittest.TestCase):
         self.assertEqual('true', config['services']['app']['environment']['APP_LOGIN_OTP_ENABLED'])
         self.assertEqual('900', config['services']['app']['environment']['APP_SESSION_IDLE_SECONDS'])
         self.assertEqual('28800', config['services']['app']['environment']['APP_JWT_EXPIRATION_SECONDS'])
+
+    def test_tls_edge_has_one_explicit_trusted_identity_for_default_and_custom_subnets(self):
+        for subnet, gateway_ip, edge_ip in [('172.31.0.0/24', '172.31.0.50', '172.31.0.51'),
+                                           ('172.25.42.0/24', '172.25.42.50', '172.25.42.51')]:
+            with self.subTest(subnet=subnet):
+                config = self.render({'FLARE_INTERNAL_SUBNET': subnet, 'FLARE_GATEWAY_PRIVATE_IP': gateway_ip,
+                                      'ASVS_TLS_EDGE_PRIVATE_IP': edge_ip})
+                actual = config['services']['tls-edge']['networks']['flare-internal']['ipv4_address']
+                self.assertEqual(edge_ip, actual)
+                self.assertIn(ipaddress.ip_address(actual), ipaddress.ip_network(subnet))
+                self.assertNotEqual(gateway_ip, actual)
+                self.assertEqual(edge_ip+'/32', config['services']['gateway']['environment']['PREVENTION_TRUSTED_PROXY_CIDRS'])
+                self.assertEqual(gateway_ip+'/32', config['services']['nginx']['environment']['NGINX_TRUSTED_PROXY_CIDR'])
+                addresses = [(service.get('networks', {}).get('flare-internal') or {}).get('ipv4_address')
+                             for service in config['services'].values()]
+                self.assertEqual(1, addresses.count(edge_ip))

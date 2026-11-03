@@ -96,6 +96,7 @@ func (l *rateLimiter) allow(key string, rate, burst float64, now time.Time) bool
 }
 
 type server struct {
+	sourceIPs    sourceIPPolicy
 	policy       atomic.Pointer[activePolicy]
 	redis        *redisSignals
 	crs          coraza.WAF
@@ -113,6 +114,10 @@ type server struct {
 }
 
 func newServer(upstream, policyURL, tokenFile string, events io.Writer) (*server, error) {
+	sourceIPs, err := newSourceIPPolicy(os.Getenv("PREVENTION_TRUSTED_PROXY_CIDRS"))
+	if err != nil {
+		return nil, err
+	}
 	crs, err := crsObserver()
 	if err != nil {
 		return nil, fmt.Errorf("CRS observer cannot start: %w", err)
@@ -139,7 +144,7 @@ func newServer(upstream, policyURL, tokenFile string, events io.Writer) (*server
 		writeGatewayError(writer, "Upstream unavailable", http.StatusBadGateway)
 	}
 	return &server{
-		proxy: proxy, crs: crs, redis: newRedisSignals(), rateSignals: make(map[netip.Addr]int),
+		proxy: proxy, crs: crs, sourceIPs: sourceIPs, redis: newRedisSignals(), rateSignals: make(map[netip.Addr]int),
 		policyURL: policyURL, tokenFile: tokenFile,
 		events: events, logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 		policyClient: &http.Client{Timeout: 3 * time.Second,
@@ -193,7 +198,7 @@ func (s *server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		writeGatewayError(writer, "Policy not ready", http.StatusServiceUnavailable)
 		return
 	}
-	ip, err := directClientIP(request.RemoteAddr)
+	ip, err := s.sourceIPs.resolvePublic(request)
 	if err != nil {
 		writeGatewayError(writer, "Invalid connection", http.StatusBadRequest)
 		return

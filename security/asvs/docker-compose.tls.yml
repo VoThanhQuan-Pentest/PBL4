@@ -17,6 +17,10 @@ services:
   nginx:
     environment:
       NGINX_PUBLIC_SERVER_NAME: app.soc.test
+  gateway:
+    environment:
+      # Trust this single disposable terminator, never the whole app network.
+      PREVENTION_TRUSTED_PROXY_CIDRS: '${ASVS_TLS_EDGE_PRIVATE_IP:-172.31.0.51}/32'
   tls-edge:
     image: flare-asvs-tls-edge:ci
     build:
@@ -42,7 +46,9 @@ services:
     mem_limit: 128m
     cpus: '0.5'
     networks:
-      flare-internal: {}
+      flare-internal:
+        # The default matches .env.e2e.example. Override explicitly for custom subnets.
+        ipv4_address: ${ASVS_TLS_EDGE_PRIVATE_IP:-172.31.0.51}
       asvs-scanner:
         aliases: [app.soc.test, attacker.test]
 networks:

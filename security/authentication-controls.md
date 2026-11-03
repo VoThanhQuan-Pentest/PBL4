@@ -62,6 +62,19 @@ UUID yêu cầu của sự kiện xác thực vẫn được server tạo độc
 Client trực tiếp backend cần dùng mã phản hồi để tra cứu lỗi; không dựa vào mã
 do chính client gửi để xác định yêu cầu đã được hệ thống tin cậy.
 
+Gateway mặc định dùng IP TCP trực tiếp và bỏ qua header IP do caller gửi.
+Khi có terminator tin cậy, chỉ cấu hình `PREVENTION_TRUSTED_PROXY_CIDRS` bằng
+CIDR số chuẩn của peer trực tiếp; không có DNS, không cho phép CIDR toàn mạng.
+Peer đó phải thay `X-Forwarded-For` bằng đúng một IP client số. Header thiếu,
+trùng, chuỗi nhiều hop, hostname, port, zone hoặc quá dài bị từ chối; caller
+không tin cậy vẫn bị bỏ qua header. IP quyết định một lần trước chặn, rate limit,
+CRS, log và chuyển tiếp. Listener quản trị phục hồi vẫn chỉ dùng IP TCP trực tiếp.
+Profile TLS CI dành riêng đặt edge ở `172.31.0.51` và chỉ tin `/32` đó. Nếu đổi
+subnet CI, đặt rõ `ASVS_TLS_EDGE_PRIVATE_IP` vào địa chỉ IPv4 còn trống trong
+subnet, cùng cấu hình gateway hiện có. Base/local/AWS không tự bật chế độ này.
+IP phục vụ tín hiệu mạng, không phải định danh tài khoản; NAT/VPN có thể dùng
+chung IP và thay đổi IP. Không thay credential, model hoặc stack live để kiểm tra.
+
 Mọi route `/internal/v1/*` của UEBA worker có dependency `require_token`;
 `GET /health` công khai để kiểm tra trạng thái. Các overlay local/AWS đặt worker
 trên mạng `ueba-internal`, không publish cổng host, và mount token ngoài Git chỉ
