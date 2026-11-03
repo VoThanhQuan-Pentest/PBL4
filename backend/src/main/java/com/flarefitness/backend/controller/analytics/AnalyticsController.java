@@ -81,7 +81,8 @@ public class AnalyticsController {
         if (sessionResolution.newSession()) {
             responseBuilder.header("Set-Cookie", analyticsSessionCookie(sessionResolution.sessionId()));
         }
-        return responseBuilder.body(response);
+        // Keep the HttpOnly correlation identifier out of script-readable JSON.
+        return responseBuilder.body(new BehaviorEventResponse(response.status(), null, response.recordedAt()));
     }
 
     @GetMapping("/me/insights")

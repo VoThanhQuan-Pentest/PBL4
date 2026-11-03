@@ -15,6 +15,12 @@ import com.flarefitness.backend.dto.product.ProductResponse;
 import com.flarefitness.backend.security.IpAddressResolver;
 import com.flarefitness.backend.security.IpRateLimitService;
 import com.flarefitness.backend.service.analytics.BehaviorAnalyticsService;
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.PropertyNamingStrategies;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -38,7 +44,7 @@ class AnalyticsControllerTest {
     private HttpServletRequest servletRequest;
 
     @Test
-    void trackingUsesServerGeneratedHttpOnlySessionInsteadOfRequestSessionId() {
+    void trackingUsesServerGeneratedHttpOnlySessionInsteadOfRequestSessionId() throws Exception {
         AnalyticsController controller = new AnalyticsController(
                 behaviorAnalyticsService,
                 ipAddressResolver,
@@ -79,6 +85,45 @@ class AnalyticsControllerTest {
         verify(ipRateLimitService).assertWithinLimit("analytics", "203.0.113.10", 120, java.time.Duration.ofMinutes(1));
         verify(ipRateLimitService).assertWithinLimit("analytics-session", sessionCaptor.getValue(), 60,
                 java.time.Duration.ofMinutes(1));
+        assertPrivateResponse(response, sessionCaptor.getValue());
+    }
+
+    @Test
+    void trackingReusesExistingCookieWithoutDisclosingItsValueInJson() throws Exception {
+        AnalyticsController controller = new AnalyticsController(
+                behaviorAnalyticsService, ipAddressResolver, ipRateLimitService, 120, 60, true);
+        String sessionId = "analytics-12345678-1234-1234-1234-123456789abc";
+        TrackBehaviorEventRequest request = new TrackBehaviorEventRequest(
+                "client-controlled-session", BehaviorEventType.PRODUCT_SEARCH,
+                null, null, null, null, null, null, "world cup", null, null, null, null);
+        when(ipAddressResolver.resolve(servletRequest)).thenReturn("203.0.113.10");
+        when(servletRequest.getCookies()).thenReturn(new Cookie[]{new Cookie("analytics_session", sessionId)});
+        when(behaviorAnalyticsService.trackEvent(eq(request), isNull(), eq(sessionId)))
+                .thenReturn(new BehaviorEventResponse("RECORDED", sessionId, LocalDateTime.of(2026, 1, 1, 12, 0)));
+
+        ResponseEntity<BehaviorEventResponse> response = controller.trackEvent(request, null, servletRequest);
+
+        verify(behaviorAnalyticsService).trackEvent(request, null, sessionId);
+        verify(ipRateLimitService).assertWithinLimit("analytics-session", sessionId, 60,
+                java.time.Duration.ofMinutes(1));
+        assertThat(response.getHeaders().getFirst("Set-Cookie")).isNull();
+        assertPrivateResponse(response, sessionId);
+    }
+
+    private void assertPrivateResponse(ResponseEntity<BehaviorEventResponse> response, String sessionId)
+            throws Exception {
+        assertThat(response.getBody().status()).isEqualTo("RECORDED");
+        assertThat(response.getBody().recordedAt()).isEqualTo(LocalDateTime.of(2026, 1, 1, 12, 0));
+        assertThat(response.getBody().sessionId()).isNull();
+        ObjectMapper mapper = new ObjectMapper().registerModule(new JavaTimeModule())
+                .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
+                .setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE)
+                .setSerializationInclusion(JsonInclude.Include.NON_NULL);
+        String json = mapper.writeValueAsString(response.getBody());
+        assertThat(json).doesNotContain(sessionId);
+        assertThat(mapper.readTree(json).has("session_id")).isFalse();
+        assertThat(mapper.readTree(json).path("status").asText()).isEqualTo("RECORDED");
+        assertThat(mapper.readTree(json).path("recorded_at").asText()).isEqualTo("2026-01-01T12:00:00");
     }
 
     @Test
