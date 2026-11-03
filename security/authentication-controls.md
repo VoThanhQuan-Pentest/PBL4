@@ -29,6 +29,26 @@ khác trả `404` trước endpoint. Đây là mô tả quyền hiện có, khô
 chạy các API đó. Bảo vệ đường truyền, cấp/xoay/thu hồi token và xác minh cấu hình
 đang triển khai phải đánh giá riêng; không suy ra từ quyền truy cập model volume.
 
+## Chính sách phiên đồng thời
+
+Web và JavaFX dùng cùng chính sách backend: một tài khoản được phép có nhiều
+phiên hợp lệ đồng thời, **không đặt giới hạn hữu hạn theo số lượng phiên**.
+Backend không đếm số phiên để từ chối đăng nhập mới hoặc tự loại thiết bị cũ.
+Vì không có ngưỡng tối đa hữu hạn, không có nhánh xử lý khi chạm trần số phiên.
+
+Mỗi lần xác thực thành công cấp JWT có ID phiên mới. Backend thu hồi riêng
+phiên đã được xác thực và gửi kèm yêu cầu đăng nhập thành công; phiên trên các
+thiết bị khác tiếp tục theo thời hạn riêng. Mật khẩu đang chờ OTP hoặc OTP sai
+không xoay/thu hồi phiên đang dùng. Giới hạn thử đăng nhập và quota OTP dưới
+đây vẫn áp dụng khi cấp phiên, độc lập với chính sách số phiên đồng thời.
+
+Phiên kết thúc theo timeout/thời hạn tuyệt đối đã nêu trong [README](../README.md),
+thu hồi một phiên, thu hồi toàn bộ hoặc kiểm tra trạng thái/phiên bản xác thực
+tài khoản ở backend. Số phiên được cho phép không thay thế các kiểm soát này.
+Hiệu lực của từng luồng thu hồi được đánh giá riêng.
+Chính sách này mô tả hành vi hiện có của [AuthController](../backend/src/main/java/com/flarefitness/backend/controller/AuthController.java)
+và [RedisTokenStore](../backend/src/main/java/com/flarefitness/backend/security/RedisTokenStore.java).
+
 ## Cấu hình và tác dụng
 
 Backend đọc các biến sau qua [application.properties](../backend/src/main/resources/application.properties).
