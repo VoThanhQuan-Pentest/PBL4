@@ -22,7 +22,9 @@ async function confirmPreparedAction({ apiRequest, operation, payload, form, ove
         if (!isAuthCurrent()) throw new Error('Phiên đăng nhập đã thay đổi. Vui lòng thử lại.');
     };
     requireCurrent();
-    const policy = await apiRequest('/profile/action-confirmations/policy');
+    const policyPath = '/profile/action-confirmations/policy'
+        + (operation ? `?operation=${encodeURIComponent(operation)}` : '');
+    const policy = await apiRequest(policyPath);
     requireCurrent();
     if (!policy || typeof policy.required !== 'boolean') throw new Error('Không đọc được chính sách xác nhận thao tác.');
     if (!policy.required) return null;

@@ -156,6 +156,11 @@ public class AdminService {
                 && (!ROLE_ADMIN.equals(role) || isInactiveStatus(status))) {
             throw new BadRequestException("Khong duoc tu ha quyen hoac khoa tai khoan dang dang nhap.");
         }
+        boolean recoveryContactChanged = !(previousEmail == null ? "" : previousEmail.trim().toLowerCase(Locale.ROOT))
+                .equals(email == null ? "" : email.trim().toLowerCase(Locale.ROOT));
+        if (user.getId().equals(currentAdminId) && recoveryContactChanged) {
+            throw new BadRequestException("Hay doi email tai khoan dang dang nhap trong ho so ca nhan de xac minh lai.");
+        }
 
         String rawPassword = request.password() == null || request.password().isEmpty() ? null : request.password();
         if (rawPassword != null) passwordPolicy.validateNewPassword(rawPassword);
@@ -163,8 +168,6 @@ public class AdminService {
         user.setRole(role);
         user.setHoTen(hoTen);
         user.setEmail(email);
-        boolean recoveryContactChanged = !(previousEmail == null ? "" : previousEmail.trim())
-                .equalsIgnoreCase(email == null ? "" : email.trim());
         user.setStatus(status);
         if (rawPassword != null) {
             user.setPassword(passwordEncoder.encode(rawPassword));

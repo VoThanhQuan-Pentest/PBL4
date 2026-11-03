@@ -77,6 +77,7 @@ async function openForm(page, operation) {
     await expect(page.locator('#profile-overlay')).toBeVisible();
     await page.locator('#edit-email').fill('destination@example.test');
     await page.locator('#edit-email-otp').fill('111111');
+    await page.locator('#edit-email-password').fill('CurrentPassword1!');
     return '#profile-form';
   }
   await page.locator('#change-pass-link').click();
@@ -102,6 +103,10 @@ for (const operation of ['EMAIL_CHANGE', 'PASSWORD_CHANGE']) {
     expect(app.executions()).toHaveLength(1);
     expect(app.requests.filter(r => r.method === 'PUT')).toHaveLength(0);
     expect(app.preparations()[0].body.operation).toBe(operation);
+    if (operation === 'EMAIL_CHANGE') {
+      expect(app.preparations()[0].body.profile.current_password).toBe('CurrentPassword1!');
+      await expect(page.locator('#edit-email-password')).toHaveValue('');
+    }
     expect(app.executions()[0].body).toEqual({ confirmation_code: '222222', destination_otp_code: operation === 'EMAIL_CHANGE' ? '111111' : '',
       request_id: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/) });
     if (operation === 'PASSWORD_CHANGE') {
@@ -163,6 +168,7 @@ test('the real password form preserves the server-disabled policy path', async (
 test('direct recovery-email change requires a transient password when the optional policy is off', async ({ page }) => {
   const app = await storefront(page, { policyRequired: false });
   const form = await openForm(page, 'EMAIL_CHANGE');
+  await page.locator('#edit-email-password').fill('');
   await page.locator(form).locator('button[type="submit"]').click();
   await expect(page.locator('#profile-error')).toContainText('mật khẩu hiện tại');
   expect(app.requests.filter(r => r.path === '/api/profile' && r.method === 'PUT')).toHaveLength(0);

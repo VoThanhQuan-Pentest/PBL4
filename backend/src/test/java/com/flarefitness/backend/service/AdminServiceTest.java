@@ -102,4 +102,21 @@ class AdminServiceTest {
         user.setCreatedAt(LocalDateTime.now());
         return user;
     }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.NullSource
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"destination@example.test", "\u0131@example.test"})
+    void adminCannotBypassOwnEmailReauthenticationThroughUserManagement(String email) {
+        User self = user(); self.setRole("ADMIN"); self.setEmail("i@example.test");
+        when(userRepository.findActiveByIdForUpdate(self.getId())).thenReturn(java.util.Optional.of(self));
+        var principal = new com.flarefitness.backend.security.CurrentUserPrincipal(self);
+        var actor = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities());
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> adminService.updateUser(self.getId(),
+                new com.flarefitness.backend.dto.admin.AdminUserRequest(self.getHoTen(), self.getUsername(), email,
+                        "", self.getRole(), self.getStatus(), null), actor))
+                .isInstanceOf(com.flarefitness.backend.exception.BadRequestException.class);
+        assertThat(self.getEmail()).isEqualTo("i@example.test");
+        org.mockito.Mockito.verify(userRepository, org.mockito.Mockito.never()).save(org.mockito.ArgumentMatchers.any());
+        org.mockito.Mockito.verify(redisTokenStore, org.mockito.Mockito.never()).revokeAll(org.mockito.ArgumentMatchers.any());
+    }
 }

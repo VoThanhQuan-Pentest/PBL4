@@ -7,6 +7,16 @@ import com.flarefitness.backend.entity.User;
 import org.junit.jupiter.api.Test;
 
 class SensitiveActionPolicyTest {
+    @Test void loginMfaRequiresEmailConfirmationWithoutExpandingPasswordOrTrialCohort() {
+        User user = new User(); user.setId("ordinary-account");
+        var policy = new SensitiveActionPolicy(false, "", true);
+        assertThat(policy.requiresEmailChangeConfirmation(user)).isTrue();
+        assertThat(policy.requiresConfirmation(user)).isFalse();
+        assertThat(policy.requiresEmailChangeConfirmation(null)).isFalse();
+        assertThat(new SensitiveActionPolicy(false, "", false).requiresEmailChangeConfirmation(user)).isFalse();
+        assertThat(SensitiveActionPolicy.policyId("EMAIL_CHANGE")).isNotEqualTo(SensitiveActionPolicy.ID);
+        assertThat(SensitiveActionPolicy.policyId("PASSWORD_CHANGE")).isEqualTo(SensitiveActionPolicy.ID);
+    }
     @Test void defaultDisabledPolicyDoesNotChangeAccounts() {
         User user = new User(); user.setId("lab-a");
         assertThat(new SensitiveActionPolicy(false, "").requiresConfirmation(user)).isFalse();

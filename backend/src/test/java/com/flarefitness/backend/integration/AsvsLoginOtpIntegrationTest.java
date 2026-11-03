@@ -79,6 +79,72 @@ class AsvsLoginOtpIntegrationTest extends ContainerizedIntegrationTest {
         assertThat(verify(challenge, codes.get(user.getEmail()), IP, AGENT).getResponse().getStatus()).isEqualTo(401);
     }
 
+    @Test void changingAnEnrolledEmailRequiresFreshPasswordCurrentFactorAndDestinationProof() throws Exception {
+        User user = fixture(); Challenge login = begin(user);
+        var authenticated = verify(login, codes.get(user.getEmail()), IP, AGENT).getResponse().getCookie("access_token");
+        assertThat(authenticated).isNotNull();
+        assertThat(environment.getProperty("app.sensitive-action-confirmation.enabled", Boolean.class, false)).isFalse();
+        var emailPolicy = mvc.perform(get("/api/profile/action-confirmations/policy").param("operation", "EMAIL_CHANGE")
+                .cookie(authenticated)).andExpect(status().isOk()).andReturn();
+        assertThat(mapper.readTree(emailPolicy.getResponse().getContentAsString()).path("required").asBoolean()).isTrue();
+        var passwordPolicy = mvc.perform(get("/api/profile/action-confirmations/policy").param("operation", "PASSWORD_CHANGE")
+                .cookie(authenticated)).andExpect(status().isOk()).andReturn();
+        assertThat(mapper.readTree(passwordPolicy.getResponse().getContentAsString()).path("required").asBoolean()).isFalse();
+        String target = user.getId() + "-destination@example.test";
+        var profile = Map.of("ho_ten", "Reauthenticated owner", "email", target, "sdt", "", "current_password", PASSWORD);
+        profileMutation(authenticated, "PUT", "/api/profile", profile).andExpect(status().isConflict());
+        codes.clear();
+        var missingPassword = Map.of("ho_ten", "Reauthenticated owner", "email", target, "sdt", "");
+        profileMutation(authenticated, "POST", "/api/profile/action-confirmations",
+                Map.of("operation", "EMAIL_CHANGE", "profile", missingPassword)).andExpect(status().isBadRequest());
+        assertThat(codes).isEmpty();
+        var prepared = profileMutation(authenticated, "POST", "/api/profile/action-confirmations",
+                Map.of("operation", "EMAIL_CHANGE", "profile", profile)).andExpect(status().isOk()).andReturn();
+        var challenge = mapper.readTree(prepared.getResponse().getContentAsString());
+        assertThat(challenge.path("policy_id").asText()).isEqualTo(com.flarefitness.backend.service.SensitiveActionPolicy.EMAIL_CHANGE_ID);
+        String currentFactor = codes.get(user.getEmail()); assertThat(currentFactor).isNotBlank();
+        assertThat(codes).doesNotContainKey(target);
+        String execute = "/api/profile/action-confirmations/" + challenge.path("id").asText() + "/execute";
+        // A valid current-factor proof still cannot replace destination ownership.
+        profileMutation(authenticated, "POST", execute, Map.of("confirmation_code", currentFactor,
+                "destination_otp_code", "000000")).andExpect(status().isBadRequest());
+        assertThat(users.findById(user.getId()).orElseThrow().getEmail()).isEqualTo(user.getEmail());
+        // A consumed current-factor proof cannot authorize a second attempt.
+        profileMutation(authenticated, "POST", execute, Map.of("confirmation_code", currentFactor,
+                "destination_otp_code", "000000")).andExpect(status().isBadRequest());
+    }
+
+    @Test void mfaEmailChangeCommitsOnlyWithBothCurrentAndDestinationMailboxProofs() throws Exception {
+        User user = fixture(); Challenge login = begin(user);
+        var session = verify(login, codes.get(user.getEmail()), IP, AGENT).getResponse().getCookie("access_token");
+        String target = user.getId() + "-destination@example.test";
+        profileMutation(session, "POST", "/api/profile/email/otp", Map.of("email", target)).andExpect(status().isOk());
+        String destination = codes.get(target);
+        var profile = Map.of("ho_ten", "Reauthenticated owner", "email", target, "sdt", "", "current_password", PASSWORD);
+        var prepared = profileMutation(session, "POST", "/api/profile/action-confirmations",
+                Map.of("operation", "EMAIL_CHANGE", "profile", profile)).andExpect(status().isOk()).andReturn();
+        String execute = "/api/profile/action-confirmations/" + mapper.readTree(prepared.getResponse().getContentAsString()).path("id").asText() + "/execute";
+        String currentFactor = codes.get(user.getEmail());
+        String wrong = "000000".equals(currentFactor) ? "111111" : "000000";
+        profileMutation(session, "POST", execute, Map.of("confirmation_code", wrong,
+                "destination_otp_code", destination)).andExpect(status().isBadRequest());
+        assertThat(users.findById(user.getId()).orElseThrow().getEmail()).isEqualTo(user.getEmail());
+        var committed = profileMutation(session, "POST", execute, Map.of("confirmation_code", currentFactor,
+                "destination_otp_code", destination)).andExpect(status().isOk()).andReturn();
+        assertThat(mapper.readTree(committed.getResponse().getContentAsString()).path("profile").path("email").asText()).isEqualTo(target);
+        profileMutation(session, "POST", execute, Map.of("confirmation_code", currentFactor)).andExpect(status().isOk());
+        assertThat(users.findById(user.getId()).orElseThrow().getEmail()).isEqualTo(target);
+    }
+
+    private org.springframework.test.web.servlet.ResultActions profileMutation(jakarta.servlet.http.Cookie session,
+            String method, String path, Object body) throws Exception {
+        String token = csrf();
+        var request = "PUT".equals(method) ? put(path) : post(path);
+        return mvc.perform(request.cookie(session, new MockCookie("XSRF-TOKEN", token)).header("X-XSRF-TOKEN", token)
+                .with(r -> { r.setRemoteAddr(IP); return r; }).header("User-Agent", AGENT)
+                .contentType(MediaType.APPLICATION_JSON).content(mapper.writeValueAsString(body)));
+    }
+
     @Test void emailFactorAuditDistinguishesIssuanceRejectionAndCompletedVerification() throws Exception {
         var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger("AUDIT");
         var previousLevel = logger.getLevel();

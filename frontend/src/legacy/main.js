@@ -1705,16 +1705,16 @@ document.addEventListener('DOMContentLoaded', () => {
             profileSubmissionPending = true;
             try {
                 const authContext = captureAuthContext();
+                const currentPassword = profileEmailPasswordInput?.value || '';
+                if (emailChanged && !currentPassword) {
+                    throw new Error('Vui lòng nhập mật khẩu hiện tại để xác minh đổi email.');
+                }
                 const confirmed = emailChanged ? await confirmSensitiveAction({ apiRequest,
                     operation: 'EMAIL_CHANGE', form: profileForm, overlay: profileOverlay,
                     isAuthCurrent: () => isAuthContextCurrent(authContext),
                     payload: { ho_ten: document.getElementById('edit-name').value.trim(), email: profileEmail,
-                        sdt: profilePhone, otp_code: otpCode }
+                        sdt: profilePhone, otp_code: otpCode, current_password: currentPassword }
                 }) : null;
-                const currentPassword = profileEmailPasswordInput?.value || '';
-                if (emailChanged && !confirmed && !currentPassword) {
-                    throw new Error('Vui lòng nhập mật khẩu hiện tại để xác minh đổi email.');
-                }
                 currentUser = normalizeUserProfile(confirmed ? confirmed.profile : await apiRequest('/profile', {
                     method: 'PUT',
                     body: {

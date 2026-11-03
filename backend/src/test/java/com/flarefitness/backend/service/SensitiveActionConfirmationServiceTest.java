@@ -83,7 +83,7 @@ class SensitiveActionConfirmationServiceTest {
     }
 
     @Test void emailTargetDoesNotSelectConfirmationRecipient() {
-        var body = new UpdateProfileRequest("Owner", "destination@example.test", "0935250037", null);
+        var body = new UpdateProfileRequest("Owner", "destination@example.test", "0935250037", null, "fresh-password");
         when(profiles.prepareConfirmedEmail(user, body)).thenReturn("0935250037");
         service.prepare(actor(session), new ActionConfirmationDtos.PrepareRequest(
                 ActionConfirmationDtos.Operation.EMAIL_CHANGE, body, null), "127.0.0.1");
@@ -155,5 +155,40 @@ class SensitiveActionConfirmationServiceTest {
         assertThatThrownBy(() -> service.execute(actor(session), action.getId(), code())).isInstanceOf(ConflictException.class);
         verify(otp, never()).verifySensitiveActionOtp(any(), any(), any(), any());
         verifyNoInteractions(audit);
+    }
+
+    @Test void oldEmailChallengeWithoutPasswordProofCannotExecuteAfterPolicyUpgrade() {
+        var action = pending(); action.setOperation("EMAIL_CHANGE"); action.setTargetEmail("destination@example.test");
+        // v1 prepared email changes without requiring the current password.
+        assertThat(action.getPolicyId()).isEqualTo(SensitiveActionPolicy.ID);
+        assertThatThrownBy(() -> service.execute(actor(session), action.getId(), code())).isInstanceOf(ConflictException.class);
+        verify(otp, never()).verifySensitiveActionOtp(any(), any(), any(), any());
+        verify(profiles, never()).applyConfirmedEmailChange(any(), any());
+    }
+
+    @Test void mfaOnlyPolicyExposesEmailGuardWithoutEnablingPasswordTrial() {
+        when(users.findByUsernameIgnoreCase("owner")).thenReturn(Optional.of(user));
+        service = new SensitiveActionConfirmationService(users, actions, otp, profiles,
+                new SensitiveActionPolicy(false, "", true), limits, audit, manager, clock);
+        assertThat(service.status("owner").required()).isFalse();
+        assertThat(service.status("owner", ActionConfirmationDtos.Operation.PASSWORD_CHANGE).required()).isFalse();
+        var email = service.status("owner", ActionConfirmationDtos.Operation.EMAIL_CHANGE);
+        assertThat(email.required()).isTrue();
+        assertThat(email.policyId()).isEqualTo(SensitiveActionPolicy.EMAIL_CHANGE_ID);
+    }
+
+    @Test void mfaOnlyEmailConfirmationNeverConsultsTheExperimentalPostloginService() {
+        var postlogin = mock(com.flarefitness.backend.service.siem.PostloginDecisionService.class);
+        service = new SensitiveActionConfirmationService(users, actions, otp, profiles,
+                new SensitiveActionPolicy(false, "", true), limits, audit, manager, postlogin);
+        var body = new UpdateProfileRequest("Owner", "destination@example.test", "", null, "fresh-password");
+        var challenge = service.prepare(actor(session), new ActionConfirmationDtos.PrepareRequest(
+                ActionConfirmationDtos.Operation.EMAIL_CHANGE, body, null), "127.0.0.1");
+        var saved = ArgumentCaptor.forClass(SensitiveActionConfirmation.class);
+        verify(actions).saveAndFlush(saved.capture());
+        when(actions.findForUpdate(challenge.id())).thenReturn(Optional.of(saved.getValue()));
+        assertThat(service.execute(actor(session), challenge.id(), new ActionConfirmationDtos.ExecuteRequest("123456", "654321")).state())
+                .isEqualTo("COMMITTED");
+        verifyNoInteractions(postlogin);
     }
 }

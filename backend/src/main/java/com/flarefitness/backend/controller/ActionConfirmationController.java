@@ -25,8 +25,9 @@ public class ActionConfirmationController {
         this.confirmations = confirmations; this.addresses = addresses;
     }
     @GetMapping("/policy")
-    public ActionConfirmationDtos.Policy policy(Authentication authentication) {
-        return confirmations.status(authentication.getName());
+    public ActionConfirmationDtos.Policy policy(Authentication authentication,
+            @org.springframework.web.bind.annotation.RequestParam(name = "operation", required = false) ActionConfirmationDtos.Operation operation) {
+        return confirmations.status(authentication.getName(), operation);
     }
     @PostMapping
     public ActionConfirmationDtos.Challenge prepare(Authentication authentication, HttpServletRequest request,

@@ -19,6 +19,27 @@ mật khẩu gắn tài khoản sau OTP, không tự cấp phiên đăng nhập.
 tương thích tắt OTP được công bố nhưng không nằm trong kết luận nhiều yếu tố
 của cấu hình ASVS.
 
+Khi `APP_LOGIN_OTP_ENABLED=true`, đổi email đăng nhập bắt buộc xác nhận email
+hiện tại, độc lập với allowlist thử nghiệm xác nhận thao tác. Chính sách đổi
+mật khẩu và phạm vi thử nghiệm ML vẫn dùng allowlist hiện có. Web hỏi
+`GET /api/profile/action-confirmations/policy?operation=EMAIL_CHANGE` hoặc
+`PASSWORD_CHANGE`; bỏ tham số giữ phản hồi chính sách thử nghiệm cũ, cùng ba
+trường JSON `required`, `contact_available`, `policy_id`.
+
+Chuẩn bị đổi email phải có `current_password` đúng trước khi lưu challenge hay
+gửi mã tới email hiện tại. Challenge gắn tài khoản, phiên, phiên bản xác thực,
+email hiện tại và nội dung thay đổi; thời hạn tối đa 300 giây. Thực hiện cần
+cả mã email hiện tại và mã sở hữu email đích. Mật khẩu hiện tại chỉ nằm trong
+yêu cầu chuẩn bị, không được lưu trong bản ghi challenge. Các challenge đổi
+email theo policy cũ bị từ chối; phải chuẩn bị lại với policy
+`password-and-current-email-otp-v2`. Tài khoản thiếu bằng chứng xác minh email
+hiện tại bị chặn cho tới khi có quy trình xác minh hợp lệ. Luồng PUT trực tiếp
+trả `409 ACTION_CONFIRMATION_REQUIRED` khi chính sách yêu cầu xác nhận; client
+cần dùng các endpoint chuẩn bị/thực hiện hiện có. Khi tắt MFA và không thuộc
+allowlist, đổi email trực tiếp vẫn cần mật khẩu hiện tại và OTP email đích.
+Quản trị viên đổi email của chính mình cũng phải dùng hồ sơ cá nhân; API quản
+lý người dùng từ chối tự đổi/xóa email để tránh bỏ qua bước xác thực lại.
+
 Mọi route `/internal/v1/*` của UEBA worker có dependency `require_token`;
 `GET /health` công khai để kiểm tra trạng thái. Các overlay local/AWS đặt worker
 trên mạng `ueba-internal`, không publish cổng host, và mount token ngoài Git chỉ

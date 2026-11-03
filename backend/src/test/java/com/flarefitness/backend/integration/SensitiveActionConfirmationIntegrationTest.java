@@ -177,7 +177,7 @@ class SensitiveActionConfirmationIntegrationTest extends ContainerizedIntegratio
             assertThat(encoder.matches(REPLACEMENT, changed.getPassword())).isTrue();
 
             String destination = "destination@example.test";
-            var profile = Map.of("ho_ten", "Confirmed owner", "email", destination, "sdt", "0930000111");
+            var profile = Map.of("ho_ten", "Confirmed owner", "email", destination, "sdt", "0930000111", "current_password", CURRENT);
             send(emailOwner, "PUT", "/api/profile", profile, 409);
             var emailChallenge = body(send(emailOwner, "POST", "/api/profile/action-confirmations",
                     Map.of("operation", "EMAIL_CHANGE", "profile", profile), 200));

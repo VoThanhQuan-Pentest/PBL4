@@ -11,7 +11,7 @@ window.calls = []; window.current = true; window.accepted = '222222'; window.exp
 window.required = true; window.contactAvailable = true;
 const apiRequest = async (path, options = {}) => {
   window.calls.push({ path, body: options.body });
-  if (path.endsWith('/policy')) return { required: window.required, contact_available: window.contactAvailable };
+  if (path.split('?')[0].endsWith('/policy')) return { required: window.required, contact_available: window.contactAvailable };
   if (path === '/profile/action-confirmations') return { id: 'fixture-operation', operation: 'EMAIL_CHANGE',
     confirmation_email_masked: 'o***@example.test', expires_at: new Date(Date.now() + (window.expired ? -1000 : 120000)).toISOString() };
   if (options.body.confirmation_code !== window.accepted) throw Object.assign(new Error('Mã xác nhận sai'), { code: 'ACTION_CONFIRMATION_CODE_INVALID' });

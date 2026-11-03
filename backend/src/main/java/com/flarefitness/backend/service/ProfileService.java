@@ -86,17 +86,14 @@ public class ProfileService {
         User user = loadUserForMutation(username);
         String oldEmail = user.getEmail();
         String requestedEmail = normalizeEmail(request.email());
-        boolean emailChanged = !normalizeEmail(oldEmail).equalsIgnoreCase(requestedEmail);
+        boolean emailChanged = !normalizeEmail(oldEmail).equals(requestedEmail);
         if (emailChanged) recordSensitiveAttempt("EMAIL_CHANGE", user.getId());
-        if (emailChanged && sensitiveActionPolicy.requiresConfirmation(user)) {
+        if (emailChanged && sensitiveActionPolicy.requiresEmailChangeConfirmation(user)) {
             throw new com.flarefitness.backend.exception.ActionConfirmationRequiredException();
         }
         // Destination-mailbox ownership does not prove the session owner still
         // controls an existing factor. Keep the separately confirmed path intact.
-        if (emailChanged && (request.currentPassword() == null || request.currentPassword().isBlank()
-                || !authService.passwordMatches(request.currentPassword(), user))) {
-            throw new BadRequestException("Mat khau hien tai khong dung.");
-        }
+        if (emailChanged) requireCurrentPassword(user, request.currentPassword());
         return applyProfileUpdate(user, request, requestedEmail, emailChanged);
     }
 
@@ -134,7 +131,7 @@ public class ProfileService {
 
     /** Internal execution path; caller holds the account and challenge locks in one transaction. */
     CurrentUserResponse applyConfirmedEmailChange(User user, UpdateProfileRequest request) {
-        if (!sensitiveActionPolicy.requiresConfirmation(user)) {
+        if (!sensitiveActionPolicy.requiresEmailChangeConfirmation(user)) {
             throw new com.flarefitness.backend.exception.ConflictException("Chinh sach xac nhan khong con ap dung.");
         }
         String target = normalizeEmail(request.email());
@@ -158,6 +155,7 @@ public class ProfileService {
 
     String prepareConfirmedEmail(User user, UpdateProfileRequest request) {
         recordSensitiveAttempt("EMAIL_CHANGE", user.getId());
+        requireCurrentPassword(user, request.currentPassword());
         String target = normalizeEmail(request.email());
         if (target.equals(normalizeEmail(user.getEmail()))
                 || userRepository.existsByEmailIgnoreCaseAndIdNot(target, user.getId())) {
@@ -165,6 +163,12 @@ public class ProfileService {
         }
         return isCustomer(user.getRole()) ? phoneNumberService.requireAvailable(request.sdt(), user.getId())
                 : phoneNumberService.normalize(request.sdt());
+    }
+
+    private void requireCurrentPassword(User user, String supplied) {
+        if (supplied == null || supplied.isBlank() || !authService.passwordMatches(supplied, user)) {
+            throw new BadRequestException("Mat khau hien tai khong dung.");
+        }
     }
 
     void applyConfirmedPassword(User user, String encodedPassword) {
@@ -177,7 +181,7 @@ public class ProfileService {
     public void sendProfileEmailOtp(String username, String email, String ipAddress) {
         User user = loadUser(username);
         String requestedEmail = normalizeEmail(email);
-        if (normalizeEmail(user.getEmail()).equalsIgnoreCase(requestedEmail)) {
+        if (normalizeEmail(user.getEmail()).equals(requestedEmail)) {
             throw new BadRequestException("Email moi phai khac email hien tai.");
         }
         if (userRepository.existsByEmailIgnoreCaseAndIdNot(requestedEmail, user.getId())) {

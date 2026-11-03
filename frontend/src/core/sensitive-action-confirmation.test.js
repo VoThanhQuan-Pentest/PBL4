@@ -36,6 +36,7 @@ describe('sensitive action confirmation', () => {
         expect(apiRequest.mock.calls[2][1].body).toEqual({ confirmation_code: '222222', destination_otp_code: '111111',
             request_id: expect.stringMatching(/^[0-9a-f-]{36}$/) });
         expect(result.state).toBe('COMMITTED'); expect(release).toHaveBeenCalledOnce();
+        expect(apiRequest.mock.calls[0][0]).toBe('/profile/action-confirmations/policy?operation=EMAIL_CHANGE');
     });
     it('does not execute a prepared action if the authenticated account changes while waiting', async () => {
         let current = true;

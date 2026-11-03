@@ -170,4 +170,60 @@ class ProfileServiceTest {
         verify(userRepository, never()).save(any());
         verify(emailOtpService, never()).verifyOtp(any(), any(), any());
     }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.NullAndEmptySource
+    @org.junit.jupiter.params.provider.ValueSource(strings = {" ", "incorrect"})
+    void confirmedEmailPreparationRequiresFreshPassword(String supplied) {
+        User user = new User(); user.setId("owner"); user.setEmail("owner@example.test"); user.setRole("Admin");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> profileService.prepareConfirmedEmail(user,
+                new UpdateProfileRequest("Owner", "destination@example.test", "", null, supplied)))
+                .isInstanceOf(com.flarefitness.backend.exception.BadRequestException.class);
+        verify(phoneNumberService, never()).normalize(any());
+        verify(userRepository, never()).save(any());
+        verify(emailOtpService, never()).verifyOtp(any(), any(), any());
+    }
+
+    @Test void confirmedEmailPreparationChecksPasswordWithoutStoringOrConsumingIt() {
+        User user = new User(); user.setId("owner"); user.setEmail("owner@example.test"); user.setRole("Admin");
+        when(authService.passwordMatches("fresh", user)).thenReturn(true);
+        when(phoneNumberService.normalize("")).thenReturn("");
+        org.assertj.core.api.Assertions.assertThat(profileService.prepareConfirmedEmail(user,
+                new UpdateProfileRequest("Owner", "destination@example.test", "", null, "fresh"))).isEmpty();
+        verify(authService).passwordMatches("fresh", user);
+        verify(userRepository, never()).save(any());
+        verify(emailOtpService, never()).verifyOtp(any(), any(), any());
+    }
+
+    @Test void loginMfaEmailGuardIsIndependentOfTheExperimentalAllowlist() {
+        User user = new User(); user.setId("ordinary"); user.setUsername("owner"); user.setEmail("owner@example.test");
+        when(userRepository.findByUsernameIgnoreCaseForUpdate("owner")).thenReturn(Optional.of(user));
+        profileService = new ProfileService(userRepository, customerRepository, passwordEncoder, authService,
+                emailOtpService, phoneNumberService, redisTokenStore, passwordPolicy, ipRateLimitService,
+                auditLogService, securityEventService, new SensitiveActionPolicy(false, "", true));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> profileService.updateProfile("owner",
+                new UpdateProfileRequest("Owner", "destination@example.test", "", "123456", "correct")))
+                .isInstanceOf(com.flarefitness.backend.exception.ActionConfirmationRequiredException.class);
+        verify(authService, never()).passwordMatches(any(), any());
+        verify(emailOtpService, never()).verifyOtp(any(), any(), any());
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test void unicodeCaseEquivalenceCannotSkipEmailFactorReauthentication() {
+        User user = new User(); user.setId("ordinary"); user.setUsername("owner");
+        user.setEmail("i@example.test"); user.setRole("Admin");
+        var request = new UpdateProfileRequest("Owner", "\u0131@example.test", "", "123456", null);
+        try (var factory = jakarta.validation.Validation.buildDefaultValidatorFactory()) {
+            org.assertj.core.api.Assertions.assertThat(factory.getValidator().validate(request)).isEmpty();
+        }
+        when(userRepository.findByUsernameIgnoreCaseForUpdate("owner")).thenReturn(Optional.of(user));
+        profileService = new ProfileService(userRepository, customerRepository, passwordEncoder, authService,
+                emailOtpService, phoneNumberService, redisTokenStore, passwordPolicy, ipRateLimitService,
+                auditLogService, securityEventService, new SensitiveActionPolicy(false, "", true));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> profileService.updateProfile("owner", request))
+                .isInstanceOf(com.flarefitness.backend.exception.ActionConfirmationRequiredException.class);
+        verify(userRepository, never()).save(any());
+        verify(emailOtpService, never()).verifyOtp(any(), any(), any());
+        org.assertj.core.api.Assertions.assertThat(user.getEmail()).isEqualTo("i@example.test");
+    }
 }

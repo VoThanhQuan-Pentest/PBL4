@@ -71,8 +71,15 @@ public class SensitiveActionConfirmationService {
     }
 
     public ActionConfirmationDtos.Policy status(String username) {
+        return status(username, null);
+    }
+
+    public ActionConfirmationDtos.Policy status(String username, ActionConfirmationDtos.Operation operation) {
         User user = users.findByUsernameIgnoreCase(username).orElseThrow(this::missing);
-        return new ActionConfirmationDtos.Policy(policy.requiresConfirmation(user), contactAvailable(user), SensitiveActionPolicy.ID);
+        boolean required = operation == ActionConfirmationDtos.Operation.EMAIL_CHANGE
+                ? policy.requiresEmailChangeConfirmation(user) : policy.requiresConfirmation(user);
+        return new ActionConfirmationDtos.Policy(required, contactAvailable(user),
+                operation == null ? SensitiveActionPolicy.ID : SensitiveActionPolicy.policyId(operation.name()));
     }
 
     /** Session metadata MUST originate from the verified-JWT request attribute, never a request body. */
@@ -86,11 +93,11 @@ public class SensitiveActionConfirmationService {
                 && (request.password() == null || request.profile() != null)) {
             throw new BadRequestException("Chi duoc chuan bi mot thao tac hop le.");
         }
-        if (postlogin != null) postlogin.beforePrepare(actor, request.operation().name());
+        if (postloginApplies(actor)) postlogin.beforePrepare(actor, request.operation().name());
         SensitiveActionConfirmation action = transactions.execute(tx -> {
             User user = users.findByUsernameIgnoreCaseForUpdate(actor.username()).orElseThrow(this::missing);
             requireCurrentActor(actor, user);
-            requirePolicy(user);
+            requirePolicy(user, request.operation().name());
             if (!contactAvailable(user)) throw new ConflictException("Email hien tai chua co bang chung xac minh. Chua the thuc hien thao tac.");
             if (actions.countByUserIdAndStateAndExpiresAtAfter(user.getId(), "PENDING", now()) >= 5) {
                 throw new ConflictException("Da co qua nhieu yeu cau dang cho. Vui long doi het han.");
@@ -100,7 +107,7 @@ public class SensitiveActionConfirmationService {
             pending.setId(UUID.randomUUID().toString()); pending.setUserId(user.getId());
             pending.setSessionPseudonym(actor.session().sessionPseudonym()); pending.setAuthVersion(actor.authVersion());
             pending.setContactEmail(normalized(user.getEmail())); pending.setContactVerifiedAt(user.getEmailVerifiedAt());
-            pending.setOperation(request.operation().name()); pending.setPolicyId(SensitiveActionPolicy.ID); pending.setState("PENDING");
+            pending.setOperation(request.operation().name()); pending.setPolicyId(SensitiveActionPolicy.policyId(pending.getOperation())); pending.setState("PENDING");
             LocalDateTime created = now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
             pending.setCreatedAt(created); pending.setExpiresAt(created.plusSeconds(otp.sensitiveActionTtlSeconds()));
             if (request.operation() == ActionConfirmationDtos.Operation.EMAIL_CHANGE) {
@@ -122,7 +129,7 @@ public class SensitiveActionConfirmationService {
         otp.sendSensitiveActionOtp(action.getContactEmail(), scope(action), accountScope(action.getUserId()),
                 action.getOperation(), action.getTargetEmail());
         return new ActionConfirmationDtos.Challenge(action.getId(), action.getOperation(),
-                masked(action.getContactEmail()), action.getExpiresAt().toInstant(java.time.ZoneOffset.UTC), SensitiveActionPolicy.ID);
+                masked(action.getContactEmail()), action.getExpiresAt().toInstant(java.time.ZoneOffset.UTC), action.getPolicyId());
     }
 
     public ActionConfirmationDtos.Executed execute(Actor actor, String id,
@@ -140,25 +147,25 @@ public class SensitiveActionConfirmationService {
             if(observed!=null&&actor.userId().equals(observed.getUserId())&&actor.session().sessionPseudonym().equals(observed.getSessionPseudonym()))
                 try{authInvestigationEvents.recordSensitiveExecution(actor.userId(),observed.getOperation(),id,request==null?null:request.requestId(),sourceIp);}catch(RuntimeException telemetryFailure){/* Missing observation cannot alter the accepted guard. */}
         }
-        var ticket = postlogin == null ? null : postlogin.beforeExecute(actor, id, request == null ? null : request.requestId(), sourceIp);
+        var ticket = postloginApplies(actor) ? postlogin.beforeExecute(actor, id, request == null ? null : request.requestId(), sourceIp) : null;
         try {
             return transactions.execute(tx -> {
             // Stable lock order: account first, then challenge. All profile
             // mutations also lock the account, preventing stale-email bypass.
             User user = users.findByUsernameIgnoreCaseForUpdate(actor.username()).orElseThrow(this::missing);
             requireCurrentActor(actor, user);
-            requirePolicy(user);
             SensitiveActionConfirmation action = actions.findForUpdate(id).orElseThrow(this::missing);
-            if (!SensitiveActionPolicy.ID.equals(action.getPolicyId())) {
-                throw new ConflictException("Chinh sach xac nhan da thay doi. Hay tao yeu cau moi.");
-            }
             if (!user.getId().equals(action.getUserId())
                     || !actor.session().sessionPseudonym().equals(action.getSessionPseudonym())) {
                 throw new ConflictException("Yeu cau khong thuoc phien hien tai.");
             }
+            requirePolicy(user, action.getOperation());
+            if (!SensitiveActionPolicy.policyId(action.getOperation()).equals(action.getPolicyId())) {
+                throw new ConflictException("Chinh sach xac nhan da thay doi. Hay tao yeu cau moi.");
+            }
             boolean password = "PASSWORD_CHANGE".equals(action.getOperation());
             if ("COMMITTED".equals(action.getState())) {
-                if (postlogin != null) postlogin.replayedCommitted(ticket);
+                if (ticket != null) postlogin.replayedCommitted(ticket);
                 return new ActionConfirmationDtos.Executed(id, action.getOperation(), "COMMITTED", password,
                         password ? null : profiles.getProfile(actor.username()), ticket == null ? null : ticket.id());
             }
@@ -169,7 +176,7 @@ public class SensitiveActionConfirmationService {
                 throw new ConflictException("Tai khoan hoac yeu cau da thay doi/het han. Hay tao yeu cau moi.");
             }
             if (request == null) throw new BadRequestException("Can ma xac nhan thao tac.");
-            if (postlogin != null) postlogin.enforceInsideTransaction(ticket, actor, action);
+            if (ticket != null) postlogin.enforceInsideTransaction(ticket, actor, action);
             otp.verifySensitiveActionOtp(action.getContactEmail(), scope(action), accountScope(user.getId()), request.confirmationCode());
             if (!action.getExpiresAt().isAfter(now())) throw new ConflictException("Yeu cau da het han trong khi xac nhan. Hay tao yeu cau moi.");
             com.flarefitness.backend.dto.auth.CurrentUserResponse profile = null;
@@ -184,7 +191,7 @@ public class SensitiveActionConfirmationService {
             if (!action.getExpiresAt().isAfter(now())) throw new ConflictException("Yeu cau da het han truoc khi hoan tat. Du lieu khong duoc luu.");
             action.setState("COMMITTED"); action.setCompletedAt(now());
             scrub(action); actions.saveAndFlush(action);
-            if (postlogin != null) postlogin.committed(ticket);
+            if (ticket != null) postlogin.committed(ticket);
             audit.success("SENSITIVE_ACTION_CONFIRMED:" + action.getPolicyId(), user.getId(), user.getId(),
                     action.getOperation(), action.getId());
             return new ActionConfirmationDtos.Executed(id, action.getOperation(), "COMMITTED", password, profile, ticket == null ? null : ticket.id());
@@ -211,8 +218,13 @@ public class SensitiveActionConfirmationService {
         });
     }
 
-    private void requirePolicy(User user) {
-        if (!policy.requiresConfirmation(user)) throw new ConflictException("Xac nhan thao tac chua duoc bat cho tai khoan nay.");
+    private void requirePolicy(User user, String operation) {
+        boolean required = "EMAIL_CHANGE".equals(operation) ? policy.requiresEmailChangeConfirmation(user)
+                : "PASSWORD_CHANGE".equals(operation) && policy.requiresConfirmation(user);
+        if (!required) throw new ConflictException("Xac nhan thao tac chua duoc bat cho tai khoan nay.");
+    }
+    private boolean postloginApplies(Actor actor) {
+        return postlogin != null && policy.requiresExperimentalConfirmation(actor.userId());
     }
     private void requireCurrentActor(Actor actor, User user) {
         if (!user.getId().equals(actor.userId()) || actor.authVersion() != version(user)) {
