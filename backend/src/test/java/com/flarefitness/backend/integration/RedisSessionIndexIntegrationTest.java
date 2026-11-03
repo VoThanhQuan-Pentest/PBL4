@@ -123,13 +123,13 @@ class RedisSessionIndexIntegrationTest extends ContainerizedIntegrationTest {
         assertConcurrentRegistrationRemainsRevocable(0, false, true);
     }
 
-    @Test void delayedMigrationAfterPhysicalDeletionRemainsRevocable() {
+    @Test void sameFingerprintRegisteredAfterPhysicalDeletionRemainsRevocable() {
         sessions.save("migrating-session", "Alice", 600);
         var interceptedRedis = spy(redis);
         doAnswer(invocation -> {
             Long deleted = redis.delete(invocation.<java.util.Collection<String>>getArgument(0));
-            // A legacy lookup can have captured owner/TTL before revocation,
-            // then publish this same fingerprint after physical deletion.
+            // Explicit registration after physical deletion must remain indexed,
+            // even if the caller supplies a previously used fingerprint.
             sessions.save("migrating-session", "Alice", 600);
             return deleted;
         }).when(interceptedRedis).delete(org.mockito.ArgumentMatchers.<String>anyCollection());

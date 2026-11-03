@@ -4,7 +4,6 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
-import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -48,6 +47,34 @@ public class RedisTokenStore {
             end
             return 1
             """, Long.class);
+
+    // Recheck the legacy record and publish its replacement in one operation:
+    // a lookup which overlapped revocation must never recreate deleted state.
+    private static final org.springframework.data.redis.core.script.DefaultRedisScript<String> MIGRATE_SESSION =
+            new org.springframework.data.redis.core.script.DefaultRedisScript<>("""
+            local current = redis.call('GET', KEYS[2])
+            if current then
+                if current == ARGV[1] then return current end
+                return nil
+            end
+            local owner = redis.call('GET', KEYS[1])
+            if not owner or owner ~= ARGV[1] then return nil end
+            local ttl = redis.call('PTTL', KEYS[1])
+            if ttl <= 0 then
+                redis.call('DEL', KEYS[1])
+                redis.call('SREM', KEYS[3], ARGV[2])
+                return nil
+            end
+            local indexTtl = redis.call('PTTL', KEYS[3])
+            redis.call('SET', KEYS[2], owner, 'PX', ttl)
+            redis.call('SADD', KEYS[3], ARGV[3])
+            if indexTtl == -2 or (indexTtl >= 0 and indexTtl < ttl) then
+                redis.call('PEXPIRE', KEYS[3], ttl)
+            end
+            redis.call('SREM', KEYS[3], ARGV[2])
+            redis.call('DEL', KEYS[1])
+            return owner
+            """, String.class);
 
     public RedisTokenStore(StringRedisTemplate redisTemplate, String tokenPrefix, String userTokenPrefix) {
         this(redisTemplate, tokenPrefix, userTokenPrefix, 0);
@@ -98,16 +125,8 @@ public class RedisTokenStore {
         if (username == null) {
             return null;
         }
-        Long ttlSeconds = redisTemplate.getExpire(legacyKey, TimeUnit.SECONDS);
-        if (ttlSeconds == null || ttlSeconds <= 0) {
-            redisTemplate.delete(legacyKey);
-            redisTemplate.opsForSet().remove(userKey(username), token);
-            return null;
-        }
-        save(token, username, ttlSeconds);
-        redisTemplate.opsForSet().remove(userKey(username), token);
-        redisTemplate.delete(legacyKey);
-        return username;
+        return redisTemplate.execute(MIGRATE_SESSION,
+                List.of(legacyKey, tokenKey(fingerprint), userKey(username)), username, token, fingerprint);
     }
 
     /** A user-interaction marker can renew only an existing session, never its absolute lifetime. */
