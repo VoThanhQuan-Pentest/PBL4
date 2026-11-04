@@ -96,6 +96,25 @@ class SupportChatServiceTest {
     }
 
     @Test
+    void readingAMissingThreadDoesNotCreateRecordsOrAcquireAnAccountWriteLock() {
+        assertThat(service.getCurrentCustomerThread(customerAuthentication)).isNull();
+        verify(threadRepository, never()).save(any(SupportThread.class));
+        verify(messageRepository, never()).save(any(SupportMessage.class));
+        verify(userRepository, never()).findActiveByIdForUpdate(any());
+    }
+
+    @Test
+    void readingAndInitializingAnExistingThreadDoNotCreateDuplicateWelcomeMessages() {
+        SupportThread existing = thread("thread-1", customer.getId());
+        when(threadRepository.findFirstByCustomerUserId(customer.getId())).thenReturn(Optional.of(existing));
+        assertThat(service.getCurrentCustomerThread(customerAuthentication).id()).isEqualTo(existing.getId());
+        assertThat(service.initializeCurrentCustomerThread(customerAuthentication).id()).isEqualTo(existing.getId());
+        verify(threadRepository, never()).save(any(SupportThread.class));
+        verify(messageRepository, never()).save(any(SupportMessage.class));
+        verify(userRepository, never()).findActiveByIdForUpdate(any());
+    }
+
+    @Test
     void firstCustomerThreadCreationLocksTheCustomerBeforeSaving() {
         when(threadRepository.findFirstByCustomerUserId(customer.getId()))
                 .thenReturn(Optional.empty(), Optional.empty());
@@ -103,7 +122,7 @@ class SupportChatServiceTest {
         when(threadRepository.save(any(SupportThread.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(messageRepository.findTop50ByThreadIdOrderByCreatedAtDesc(any())).thenReturn(List.of());
 
-        SupportThreadResponse response = service.getCurrentCustomerThread(customerAuthentication, true);
+        SupportThreadResponse response = service.initializeCurrentCustomerThread(customerAuthentication);
 
         assertThat(response).isNotNull();
         assertThat(response.accountKey()).isEqualTo(customer.getId());
@@ -136,13 +155,17 @@ class SupportChatServiceTest {
                 .isInstanceOf(AccessDeniedException.class)
                 .hasMessageContaining("khong co quyen");
 
-        assertThatThrownBy(() -> service.getCurrentCustomerThread(staffAuthentication, false))
+        assertThatThrownBy(() -> service.getCurrentCustomerThread(staffAuthentication))
                 .isInstanceOf(AccessDeniedException.class)
                 .hasMessageContaining("khong su dung kenh");
 
-        assertThatThrownBy(() -> service.getCurrentCustomerThread(null, false))
+        assertThatThrownBy(() -> service.getCurrentCustomerThread(null))
                 .isInstanceOf(UnauthorizedException.class)
                 .hasMessageContaining("dang nhap");
+        assertThatThrownBy(() -> service.initializeCurrentCustomerThread(staffAuthentication))
+                .isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(() -> service.initializeCurrentCustomerThread(null))
+                .isInstanceOf(UnauthorizedException.class);
     }
 
     private User user(String id, String username, String role) {

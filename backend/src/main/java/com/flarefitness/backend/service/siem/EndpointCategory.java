@@ -38,7 +38,8 @@ public enum EndpointCategory {
             case "GET /api/orders", "GET /api/orders/page", "PATCH /api/orders/{orderId}",
                     "GET /api/reviews", "GET /api/reviews/page", "PATCH /api/reviews/{id}",
                     "DELETE /api/reviews/{id}", "PUT /api/sync/app/{key}" -> PRIVILEGED;
-            case "GET /api/support/me", "GET /api/support/me/messages" -> SUPPORT_READ;
+            // Opening the support panel stays a read-workflow event; it sends no customer message.
+            case "GET /api/support/me", "GET /api/support/me/messages", "POST /api/support/me" -> SUPPORT_READ;
             case "POST /api/support/me/messages" -> SUPPORT_SEND;
             case "GET /api/reviews/products/{productId}", "GET /api/reviews/products/{productId}/page" -> REVIEW_READ;
             case "POST /api/reviews" -> REVIEW_CREATE;

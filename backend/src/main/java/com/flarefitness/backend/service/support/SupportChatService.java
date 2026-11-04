@@ -71,16 +71,23 @@ public class SupportChatService {
         this.customerRepository = customerRepository;
     }
 
-    @Transactional
-    public SupportThreadResponse getCurrentCustomerThread(Authentication authentication, boolean createIfMissing) {
+    @Transactional(readOnly = true)
+    public SupportThreadResponse getCurrentCustomerThread(Authentication authentication) {
         User user = requireAuthenticatedUser(authentication);
         assertCustomerUser(user);
-
-        SupportThread thread = findOrCreateThread(user, createIfMissing);
+        SupportThread thread = supportThreadRepository.findFirstByCustomerUserId(user.getId()).orElse(null);
         if (thread == null) {
             return null;
         }
 
+        return toThreadResponse(thread, customerRepository.findUniqueActiveByUserId(user.getId()).orElse(null), user);
+    }
+
+    @Transactional
+    public SupportThreadResponse initializeCurrentCustomerThread(Authentication authentication) {
+        User user = requireAuthenticatedUser(authentication);
+        assertCustomerUser(user);
+        SupportThread thread = findOrCreateThread(user, true);
         return toThreadResponse(thread, customerRepository.findUniqueActiveByUserId(user.getId()).orElse(null), user);
     }
 

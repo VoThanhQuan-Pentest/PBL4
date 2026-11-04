@@ -46,11 +46,15 @@ public class SupportController {
 
     @GetMapping("/me")
     public ResponseEntity<SupportThreadResponse> getCurrentCustomerThread(
-            Authentication authentication,
-            @RequestParam(defaultValue = "false") boolean createIfMissing
+            Authentication authentication
     ) {
-        SupportThreadResponse response = supportChatService.getCurrentCustomerThread(authentication, createIfMissing);
+        SupportThreadResponse response = supportChatService.getCurrentCustomerThread(authentication);
         return response == null ? ResponseEntity.noContent().build() : ResponseEntity.ok(response);
+    }
+
+    @PostMapping("/me")
+    public ResponseEntity<SupportThreadResponse> initializeCurrentCustomerThread(Authentication authentication) {
+        return ResponseEntity.ok(supportChatService.initializeCurrentCustomerThread(authentication));
     }
 
     @PostMapping("/me/messages")

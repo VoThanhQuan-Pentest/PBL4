@@ -2,9 +2,14 @@ package com.flarefitness.backend.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.any;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.head;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -16,6 +21,12 @@ import com.flarefitness.backend.security.JwtAuthenticationFilter;
 import com.flarefitness.backend.security.JwtTokenService;
 import com.flarefitness.backend.security.RedisTokenStore;
 import com.flarefitness.backend.service.siem.SecurityEventService;
+import com.flarefitness.backend.controller.support.SupportController;
+import com.flarefitness.backend.service.support.SupportChatService;
+import com.flarefitness.backend.dto.support.SupportThreadResponse;
+import com.flarefitness.backend.security.IpRateLimitService;
+import org.springframework.mock.web.MockCookie;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -75,6 +86,36 @@ class ApiSecurityHeadersTest {
                 .andExpect(jsonPath("$.code").value("CSRF_INVALID")).andReturn());
     }
 
+    @Test void supportInitializationRequiresUnsafeMethodAuthenticationAndCsrf() throws Exception {
+        SupportChatService support = context.getBean(SupportChatService.class);
+        mvc.perform(get("/api/support/me").param("createIfMissing", "true")
+                        .with(user("owned-customer").roles("CUSTOMER")))
+                .andExpect(status().isNoContent());
+        mvc.perform(head("/api/support/me").param("createIfMissing", "true")
+                        .with(user("owned-customer").roles("CUSTOMER")))
+                .andExpect(status().isNoContent());
+        verify(support, never()).initializeCurrentCustomerThread(any());
+
+        mvc.perform(post("/api/support/me").with(user("owned-customer").roles("CUSTOMER")))
+                .andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("CSRF_INVALID"));
+        mvc.perform(post("/api/support/me").with(user("owned-customer").roles("CUSTOMER"))
+                        .cookie(new MockCookie("XSRF-TOKEN", "owned-proof")).header("X-XSRF-TOKEN", "wrong-proof"))
+                .andExpect(status().isForbidden());
+        verify(support, never()).initializeCurrentCustomerThread(any());
+
+        when(support.initializeCurrentCustomerThread(any())).thenReturn(new SupportThreadResponse(
+                "owned-thread", "owned-customer", null, "open", null, null, List.of()));
+        mvc.perform(post("/api/support/me").with(user("owned-customer").roles("CUSTOMER"))
+                        .cookie(new MockCookie("XSRF-TOKEN", "owned-proof")).header("X-XSRF-TOKEN", "owned-proof"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.id").value("owned-thread"));
+        verify(support).initializeCurrentCustomerThread(any());
+        mvc.perform(post("/api/support/me").cookie(new MockCookie("XSRF-TOKEN", "owned-proof"))
+                        .header("X-XSRF-TOKEN", "owned-proof"))
+                .andExpect(status().isUnauthorized());
+        assertThat(com.flarefitness.backend.service.siem.EndpointCategory.fromHandlerPattern(
+                "POST", "/api/support/me")).isEqualTo(com.flarefitness.backend.service.siem.EndpointCategory.SUPPORT_READ);
+    }
+
     private void assertHeaders(MvcResult result) {
         var response = result.getResponse();
         assertThat(response.getHeaders("Content-Security-Policy")).hasSize(1);
@@ -104,6 +145,10 @@ class ApiSecurityHeadersTest {
         }
         @Bean IpAddressResolver addresses() { return new IpAddressResolver(""); }
         @Bean OwnedApi api() { return new OwnedApi(); }
+        @Bean SupportChatService supportService() { return mock(SupportChatService.class); }
+        @Bean SupportController supportApi(SupportChatService supportService, IpAddressResolver addresses) {
+            return new SupportController(supportService, addresses, mock(IpRateLimitService.class), 20);
+        }
     }
 
     @RestController

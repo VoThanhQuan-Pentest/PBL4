@@ -10036,7 +10036,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const requestAuthContext = captureAuthContext();
 
         try {
-            const response = await apiRequest(`/support/me?createIfMissing=${createIfMissing ? 'true' : 'false'}`);
+            const response = await apiRequest('/support/me', { method: createIfMissing ? 'POST' : 'GET' });
             if (!isAuthContextCurrent(requestAuthContext) || requestAuthContext.workspaceAccess) {
                 return null;
             }
